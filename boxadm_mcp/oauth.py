@@ -64,7 +64,7 @@ def login(
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write("認可完了。このタブを閉じてターミナルに戻ってください。".encode())
+            self.wfile.write(b"Authorization complete. You can close this tab and return to the terminal.")
 
         def log_message(self, *a):
             pass
