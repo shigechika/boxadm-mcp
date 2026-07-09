@@ -97,29 +97,28 @@ change touching that distinction preserves it).
 
 ### Externally-owned folders are out of audit scope, but never silently dropped
 
-`_scan()` skips folders whose `owned_by` login is a **known** external address,
-under two guards: `want_collabs and doms and owner and "@" in owner and
-is_external(owner, doms)`. The rationale: this org is only a *guest* on an
+`_scan()` skips folders owned by a **different Box enterprise** using Box's
+authoritative `is_externally_owned` flag (requested in the `get_folder_items`
+`fields`), gated only on `want_collabs`: `if want_collabs and
+it.get("is_externally_owned")`. The rationale: this org is only a *guest* on an
 externally-owned folder, cannot govern its collaborations, and the "external
 collaborators" on it are just the owner's own org accounts — noise, not a leak
 of *our* content. Skipped folders are reported under `skipped_externally_owned`
 (and counted in `daily_brief`), so this is scoping, not silent truncation.
 
-The two guards are load-bearing and must not be dropped:
-- **`doms` (allowlist configured)**: with no `BOX_ALLOWED_DOMAINS`,
-  `is_external()` treats *every* address as external, so skipping-on-external
-  would skip essentially all folders and audit nothing. Note this is the
-  *opposite* default from the collaborator check, which intentionally does NOT
-  gate on `doms` (unset allowlist → flag every collaborator as external, the
-  fail-safe for a leak check). Over-skipping folders is dangerous; over-flagging
-  collaborators is safe — the asymmetry is deliberate.
-- **`want_collabs`**: this scoping is for the collaborator audit;
-  `public_shared_links` (`want_collabs=False`) keeps its prior full traversal.
+Do **not** revert this to an owner-email-domain heuristic
+(`is_external(owner, doms)`). That was tried and was wrong: this org's OWN
+folders are largely owned by Box Platform service accounts on
+`boxdevedition.com` (in-enterprise, `is_externally_owned=false`), which the
+domain heuristic misread as external and over-skipped — reducing a real
+production audit from ~190 folders to 9. `is_externally_owned` has no such
+false positive. A missing/false flag stays in scope (cautious toward auditing).
+The `want_collabs` gate keeps `public_shared_links` on its prior full traversal.
 
-Flag any change that (a) skips on an *unknown* owner instead of a known-external
-one, (b) drops either guard, (c) drops skipped folders from the output, or
-(d) lets an externally-owned folder's collaborations count as an external-sharing
-finding.
+Flag any change that (a) reintroduces an owner-domain heuristic for the skip,
+(b) drops the `want_collabs` gate, (c) skips on a missing/false flag, (d) drops
+skipped folders from the output, or (e) lets an externally-owned folder's
+collaborations count as an external-sharing finding.
 
 ## 6. Secrets and adversarial tool inputs
 

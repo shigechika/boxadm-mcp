@@ -107,13 +107,39 @@ def test_scan_memo_shared_between_collab_tools():
 
 
 EXT_OWNED_ROOT = {
-    "total_count": 3,
+    "total_count": 4,
     "entries": [
         # internal-owned folder with a real external collaborator — in scope
-        {"type": "folder", "id": "F1", "name": "alpha", "owned_by": {"login": "ownerA@example.com"}, "shared_link": None},
-        # externally-owned folder (we're only a guest) — out of scope, must be skipped
-        {"type": "folder", "id": "FEXT", "name": "EXT_vendor", "owned_by": {"login": "svc@partner.example"}, "shared_link": None},
-        # folder with UNKNOWN ownership (no owned_by) — stays in scope (cautious)
+        {
+            "type": "folder",
+            "id": "F1",
+            "name": "alpha",
+            "owned_by": {"login": "ownerA@example.com"},
+            "is_externally_owned": False,
+            "shared_link": None,
+        },
+        # externally-owned folder (different Box enterprise) — out of scope, skipped
+        {
+            "type": "folder",
+            "id": "FEXT",
+            "name": "EXT_vendor",
+            "owned_by": {"login": "svc@partner.example"},
+            "is_externally_owned": True,
+            "shared_link": None,
+        },
+        # OUR OWN folder, owned by a Box Platform service account whose login is on
+        # an "external-looking" domain (boxdevedition.com) but is IN-enterprise
+        # (is_externally_owned=false). Must be WALKED — the old owner-domain
+        # heuristic wrongly skipped these; the flag does not.
+        {
+            "type": "folder",
+            "id": "FSVC",
+            "name": "01-dept",
+            "owned_by": {"login": "AutomationUser_123_abc@boxdevedition.com"},
+            "is_externally_owned": False,
+            "shared_link": None,
+        },
+        # folder with the flag absent — stays in scope (cautious toward auditing)
         {"type": "folder", "id": "FUNK", "name": "mystery", "shared_link": None},
     ],
 }
@@ -131,7 +157,7 @@ def _router_ext_owned():
             return httpx.Response(200, json=EXT_OWNED_ROOT)
         if path.endswith("/collaborations"):
             collab_paths.append(path)
-            # F1 has an external collaborator; FUNK has none
+            # F1 has an external collaborator; the rest have none
             body = F1_COLLABS if path == "/2.0/folders/F1/collaborations" else {"entries": []}
             return httpx.Response(200, json=body)
         return httpx.Response(200, json={"entries": []})
@@ -146,14 +172,17 @@ def test_external_collaborators_skips_externally_owned_folders():
     with r:
         out = _call(server.external_collaborators)(max_depth=1)
 
-    # The externally-owned folder is reported separately, never as a leak of our data.
+    # Only the folder Box flags is_externally_owned=true is skipped.
     skipped = {s["folder_id"]: s for s in out["skipped_externally_owned"]}
     assert set(skipped) == {"FEXT"}
     assert skipped["FEXT"]["owner"] == "svc@partner.example"
 
-    # Its collaborations are never even queried (out of scope, budget-free)...
+    # Its collaborations are never even queried (out of scope, budget-free).
     assert "/2.0/folders/FEXT/collaborations" not in collab_paths
-    # ...and the unknown-owner folder IS still walked (cautious toward auditing).
+    # The service-account-owned in-enterprise folder IS walked (proves the skip is
+    # NOT an owner-domain heuristic — boxdevedition.com would fail that heuristic).
+    assert "/2.0/folders/FSVC/collaborations" in collab_paths
+    # The flag-absent folder IS walked (cautious toward auditing).
     assert "/2.0/folders/FUNK/collaborations" in collab_paths
 
     # Only the internal folder's external collaborator surfaces; nothing from FEXT.
@@ -162,23 +191,22 @@ def test_external_collaborators_skips_externally_owned_folders():
     assert all(c["folder_id"] == "F1" for c in out["external_collaborators"])
 
     # Skipped folder does not consume the folders_scanned budget.
-    assert out["folders_scanned"] == 3  # root + F1 + FUNK (FEXT excluded)
+    assert out["folders_scanned"] == 4  # root + F1 + FSVC + FUNK (FEXT excluded)
 
 
-def test_external_collaborators_does_not_skip_when_allowlist_unset(monkeypatch):
-    # Regression: with BOX_ALLOWED_DOMAINS unset, is_external() treats EVERY
-    # address as external. The externally-owned skip must NOT fire in that case,
-    # or _scan() would skip essentially all folders and audit nothing. Every
-    # folder stays in scope; nothing is reported as skipped.
+def test_externally_owned_skip_is_independent_of_allowlist(monkeypatch):
+    # The skip is driven purely by Box's is_externally_owned flag, NOT the domain
+    # allowlist. Even with BOX_ALLOWED_DOMAINS unset, the flagged folder is skipped
+    # and the in-enterprise (incl. service-account-owned) folders are walked.
     monkeypatch.delenv("BOX_ALLOWED_DOMAINS", raising=False)
     r, _, collab_paths = _router_ext_owned()
     with r:
         out = _call(server.external_collaborators)(max_depth=1)
 
-    assert out["skipped_externally_owned"] == []  # nothing skipped without an allowlist
-    assert out["folders_scanned"] == 4  # root + F1 + FEXT + FUNK (none excluded)
-    # The would-be externally-owned folder IS walked (its collaborations queried).
-    assert "/2.0/folders/FEXT/collaborations" in collab_paths
+    assert {s["folder_id"] for s in out["skipped_externally_owned"]} == {"FEXT"}
+    assert out["folders_scanned"] == 4  # FEXT excluded regardless of allowlist
+    assert "/2.0/folders/FEXT/collaborations" not in collab_paths
+    assert "/2.0/folders/FSVC/collaborations" in collab_paths  # in-enterprise: walked
 
 
 def test_enumeration_missing_env(monkeypatch):

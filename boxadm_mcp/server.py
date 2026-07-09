@@ -454,7 +454,12 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
             offset = 0
             while True:
                 try:
-                    resp = client.get_folder_items(fid, fields=["type", "id", "name", "owned_by", "shared_link"], limit=1000, offset=offset)
+                    resp = client.get_folder_items(
+                        fid,
+                        fields=["type", "id", "name", "owned_by", "shared_link", "is_externally_owned"],
+                        limit=1000,
+                        offset=offset,
+                    )
                 except BoxError:
                     break
                 entries = resp.get("entries", [])
@@ -473,23 +478,26 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                             }
                         )
                     if it.get("type") == "folder":
-                        # Externally-owned folders (e.g. a vendor's folder this
-                        # org is only a guest on) are out of scope for the
-                        # collaborator audit: we don't own the content, can't
-                        # govern its collaborations, and the "external
-                        # collaborators" on them are just the owner's own org
-                        # accounts — noise, not a leak of our data. Skip the whole
-                        # subtree, but only under two guards:
-                        #   (1) want_collabs — this scoping is for the
-                        #       collaborator audit; public_shared_links keeps its
-                        #       prior full traversal (its cache key differs).
-                        #   (2) doms configured — with no allowlist, is_external()
-                        #       treats EVERY address as external, so skipping on it
-                        #       would skip essentially all folders (audit nothing).
-                        #       Only skip a KNOWN-external owner when we actually
-                        #       know our own domains. Unknown/blank ownership always
-                        #       stays in scope (cautious toward auditing).
-                        if want_collabs and doms and owner and "@" in owner and is_external(owner, doms):
+                        # Skip folders owned by a DIFFERENT Box enterprise (a
+                        # vendor's folder this org is only a guest on): we don't own
+                        # the content, can't govern its collaborations, and the
+                        # "external collaborators" on them are just the owner's own
+                        # org accounts — noise, not a leak of our data.
+                        #
+                        # `is_externally_owned` is Box's AUTHORITATIVE signal — true
+                        # only when the owner is outside our enterprise, regardless
+                        # of the owner's login domain. An earlier version used an
+                        # owner-email-domain heuristic (is_external(owner)); that was
+                        # wrong because this org's OWN folders are largely owned by
+                        # Box Platform service accounts on `boxdevedition.com`, which
+                        # the heuristic misread as external and over-skipped. The
+                        # flag has no such false positive (those service accounts are
+                        # in-enterprise → is_externally_owned=false). A missing/false
+                        # flag stays in scope (cautious toward auditing).
+                        #
+                        # Scoped to the collaborator audit; public_shared_links
+                        # (want_collabs=False) keeps its prior full traversal.
+                        if want_collabs and it.get("is_externally_owned"):
                             skipped_external.append({"folder_id": it.get("id"), "folder_name": it.get("name"), "owner": owner})
                             continue
                         queue.append((it.get("id"), it.get("name"), owner, depth + 1))
