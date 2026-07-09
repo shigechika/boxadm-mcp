@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/shigechika/boxadm-mcp/compare/v0.3.3...v0.3.4) (2026-07-09)
+
+
+### Bug Fixes
+
+* skip externally-owned folders in external-collaborator scan ([#3](https://github.com/shigechika/boxadm-mcp/issues/3)) ([5b3d37e](https://github.com/shigechika/boxadm-mcp/commit/5b3d37eced6253d626e4a2c2368cc83d3b2d3c68))
+
 ## [0.3.3](https://github.com/shigechika/boxadm-mcp/compare/v0.3.2...v0.3.3) (2026-07-08)
 
 
