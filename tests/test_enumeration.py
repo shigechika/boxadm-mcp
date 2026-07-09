@@ -165,6 +165,22 @@ def test_external_collaborators_skips_externally_owned_folders():
     assert out["folders_scanned"] == 3  # root + F1 + FUNK (FEXT excluded)
 
 
+def test_external_collaborators_does_not_skip_when_allowlist_unset(monkeypatch):
+    # Regression: with BOX_ALLOWED_DOMAINS unset, is_external() treats EVERY
+    # address as external. The externally-owned skip must NOT fire in that case,
+    # or _scan() would skip essentially all folders and audit nothing. Every
+    # folder stays in scope; nothing is reported as skipped.
+    monkeypatch.delenv("BOX_ALLOWED_DOMAINS", raising=False)
+    r, _, collab_paths = _router_ext_owned()
+    with r:
+        out = _call(server.external_collaborators)(max_depth=1)
+
+    assert out["skipped_externally_owned"] == []  # nothing skipped without an allowlist
+    assert out["folders_scanned"] == 4  # root + F1 + FEXT + FUNK (none excluded)
+    # The would-be externally-owned folder IS walked (its collaborations queried).
+    assert "/2.0/folders/FEXT/collaborations" in collab_paths
+
+
 def test_enumeration_missing_env(monkeypatch):
     monkeypatch.delenv("BOX_CLIENT_ID", raising=False)
     out = _call(server.external_collaborators)()

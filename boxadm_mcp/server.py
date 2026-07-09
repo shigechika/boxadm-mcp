@@ -474,14 +474,22 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                         )
                     if it.get("type") == "folder":
                         # Externally-owned folders (e.g. a vendor's folder this
-                        # org is only a guest on) are out of audit scope: we don't
-                        # own the content, can't govern its collaborations, and the
-                        # "external collaborators" on them are just the owner's own
-                        # org accounts — noise, not a leak of our data. Skip the
-                        # whole subtree. Only a KNOWN-external owner is skipped;
-                        # unknown/blank ownership stays in scope (cautious toward
-                        # auditing, mirroring the collaborator check above).
-                        if owner and "@" in owner and is_external(owner, doms):
+                        # org is only a guest on) are out of scope for the
+                        # collaborator audit: we don't own the content, can't
+                        # govern its collaborations, and the "external
+                        # collaborators" on them are just the owner's own org
+                        # accounts — noise, not a leak of our data. Skip the whole
+                        # subtree, but only under two guards:
+                        #   (1) want_collabs — this scoping is for the
+                        #       collaborator audit; public_shared_links keeps its
+                        #       prior full traversal (its cache key differs).
+                        #   (2) doms configured — with no allowlist, is_external()
+                        #       treats EVERY address as external, so skipping on it
+                        #       would skip essentially all folders (audit nothing).
+                        #       Only skip a KNOWN-external owner when we actually
+                        #       know our own domains. Unknown/blank ownership always
+                        #       stays in scope (cautious toward auditing).
+                        if want_collabs and doms and owner and "@" in owner and is_external(owner, doms):
                             skipped_external.append({"folder_id": it.get("id"), "folder_name": it.get("name"), "owner": owner})
                             continue
                         queue.append((it.get("id"), it.get("name"), owner, depth + 1))
