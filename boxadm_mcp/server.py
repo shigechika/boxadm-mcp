@@ -407,6 +407,7 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
     doms = allowed_domains()
     ext_collabs: list[dict] = []
     public_links: list[dict] = []
+    skipped_external: list[dict] = []
     visited: set[str] = set()
     seen = 0
     capped = False
@@ -472,13 +473,30 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                             }
                         )
                     if it.get("type") == "folder":
+                        # Externally-owned folders (e.g. a vendor's folder this
+                        # org is only a guest on) are out of audit scope: we don't
+                        # own the content, can't govern its collaborations, and the
+                        # "external collaborators" on them are just the owner's own
+                        # org accounts — noise, not a leak of our data. Skip the
+                        # whole subtree. Only a KNOWN-external owner is skipped;
+                        # unknown/blank ownership stays in scope (cautious toward
+                        # auditing, mirroring the collaborator check above).
+                        if owner and "@" in owner and is_external(owner, doms):
+                            skipped_external.append({"folder_id": it.get("id"), "folder_name": it.get("name"), "owner": owner})
+                            continue
                         queue.append((it.get("id"), it.get("name"), owner, depth + 1))
                 total = resp.get("total_count")
                 offset += len(entries)
                 if not entries or (total is not None and offset >= total):
                     break
 
-    return {"folders_scanned": seen, "capped": capped, "external_collaborations": ext_collabs, "public_shared_links": public_links}
+    return {
+        "folders_scanned": seen,
+        "capped": capped,
+        "external_collaborations": ext_collabs,
+        "public_shared_links": public_links,
+        "skipped_externally_owned": skipped_external,
+    }
 
 
 @mcp.tool()
@@ -496,11 +514,18 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
             when coverage was cut short.
         max_depth: Folder recursion depth (default 1 = top-level folders only).
 
+    Externally-owned folders (this org is only a guest, not the owner) are out
+    of scope and skipped — we cannot govern their collaborations, and their
+    "external collaborators" are just the owner's own org accounts. They are
+    reported separately under ``skipped_externally_owned`` (never silently
+    dropped) and do not consume the ``max_folders`` budget.
+
     Coverage note: limited to content the co-admin user can access (not provably
     100% of the enterprise) and to the depth/folders caps. Returns
-    ``folders_scanned``, ``capped``, ``count``, and ``external_collaborators``
-    (folder, owner, collaborator, role, status, expires_at). On failure returns
-    ``{"error": ...}``.
+    ``folders_scanned``, ``capped``, ``count``, ``external_collaborators``
+    (folder, owner, collaborator, role, status, expires_at), and
+    ``skipped_externally_owned`` (folder_id, folder_name, owner). On failure
+    returns ``{"error": ...}``.
     """
     client, err = _connect()
     if err:
@@ -511,6 +536,7 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
         "capped": scan["capped"],
         "count": len(scan["external_collaborations"]),
         "external_collaborators": scan["external_collaborations"],
+        "skipped_externally_owned": scan["skipped_externally_owned"],
     }
 
 
@@ -622,5 +648,6 @@ def daily_brief(since_hours: int = 24, max_events: int = 5000, max_folders: int 
             "external_collaborations_sample": scan["external_collaborations"][:top],
             "public_shared_links_sample": scan["public_shared_links"][:top],
             "top_external_sharers": _rank_external_sharers(scan)[:top],
+            "skipped_externally_owned_count": len(scan["skipped_externally_owned"]),
         },
     }

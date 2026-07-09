@@ -95,6 +95,20 @@ treats a collaboration with no `login` as *not* external — group
 collaborations vs. missing individual data are not the same thing; verify a
 change touching that distinction preserves it).
 
+### Externally-owned folders are out of audit scope, but never silently dropped
+
+`_scan()` skips folders whose `owned_by` login is a **known** external address
+(the same `owner and "@" in owner and is_external(owner, doms)` guard used for
+collaborators — an unknown/blank owner stays in scope, cautious toward
+auditing). The rationale: this org is only a *guest* on an externally-owned
+folder, cannot govern its collaborations, and the "external collaborators" on
+it are just the owner's own org accounts — noise, not a leak of *our* content.
+Skipped folders are reported under `skipped_externally_owned` (and counted in
+`daily_brief`), so this is scoping, not silent truncation. Flag any change that
+(a) skips on an *unknown* owner instead of a known-external one, (b) drops
+skipped folders from the output, or (c) lets an externally-owned folder's
+collaborations count as an external-sharing finding.
+
 ## 6. Secrets and adversarial tool inputs
 
 - `BOX_CLIENT_ID` / `BOX_CLIENT_SECRET` are read from the environment

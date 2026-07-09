@@ -106,6 +106,65 @@ def test_scan_memo_shared_between_collab_tools():
     assert counts["collab"] == after_first["collab"]
 
 
+EXT_OWNED_ROOT = {
+    "total_count": 3,
+    "entries": [
+        # internal-owned folder with a real external collaborator — in scope
+        {"type": "folder", "id": "F1", "name": "alpha", "owned_by": {"login": "ownerA@example.com"}, "shared_link": None},
+        # externally-owned folder (we're only a guest) — out of scope, must be skipped
+        {"type": "folder", "id": "FEXT", "name": "EXT_vendor", "owned_by": {"login": "svc@partner.example"}, "shared_link": None},
+        # folder with UNKNOWN ownership (no owned_by) — stays in scope (cautious)
+        {"type": "folder", "id": "FUNK", "name": "mystery", "shared_link": None},
+    ],
+}
+
+
+def _router_ext_owned():
+    counts: Counter = Counter()
+    collab_paths: list[str] = []
+
+    def handler(request):
+        path = request.url.path
+        if path == "/oauth2/token":
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        if path == "/2.0/folders/0/items":
+            return httpx.Response(200, json=EXT_OWNED_ROOT)
+        if path.endswith("/collaborations"):
+            collab_paths.append(path)
+            # F1 has an external collaborator; FUNK has none
+            body = F1_COLLABS if path == "/2.0/folders/F1/collaborations" else {"entries": []}
+            return httpx.Response(200, json=body)
+        return httpx.Response(200, json={"entries": []})
+
+    r = respx.mock(assert_all_called=False)
+    r.route(host="api.box.com").mock(side_effect=handler)
+    return r, counts, collab_paths
+
+
+def test_external_collaborators_skips_externally_owned_folders():
+    r, _, collab_paths = _router_ext_owned()
+    with r:
+        out = _call(server.external_collaborators)(max_depth=1)
+
+    # The externally-owned folder is reported separately, never as a leak of our data.
+    skipped = {s["folder_id"]: s for s in out["skipped_externally_owned"]}
+    assert set(skipped) == {"FEXT"}
+    assert skipped["FEXT"]["owner"] == "svc@partner.example"
+
+    # Its collaborations are never even queried (out of scope, budget-free)...
+    assert "/2.0/folders/FEXT/collaborations" not in collab_paths
+    # ...and the unknown-owner folder IS still walked (cautious toward auditing).
+    assert "/2.0/folders/FUNK/collaborations" in collab_paths
+
+    # Only the internal folder's external collaborator surfaces; nothing from FEXT.
+    by = {c["collaborator"] for c in out["external_collaborators"]}
+    assert by == {"ext@gmail.com", "pending@partner.example"}
+    assert all(c["folder_id"] == "F1" for c in out["external_collaborators"])
+
+    # Skipped folder does not consume the folders_scanned budget.
+    assert out["folders_scanned"] == 3  # root + F1 + FUNK (FEXT excluded)
+
+
 def test_enumeration_missing_env(monkeypatch):
     monkeypatch.delenv("BOX_CLIENT_ID", raising=False)
     out = _call(server.external_collaborators)()
