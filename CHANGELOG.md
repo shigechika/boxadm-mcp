@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/shigechika/boxadm-mcp/compare/v0.3.4...v0.3.5) (2026-07-09)
+
+
+### Bug Fixes
+
+* use is_externally_owned flag instead of owner-domain heuristic ([#5](https://github.com/shigechika/boxadm-mcp/issues/5)) ([0235f8f](https://github.com/shigechika/boxadm-mcp/commit/0235f8f84bd3bb2886c5745b69fb9d6b9cb7255d))
+
 ## [0.3.4](https://github.com/shigechika/boxadm-mcp/compare/v0.3.3...v0.3.4) (2026-07-09)
 
 
