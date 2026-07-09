@@ -99,8 +99,9 @@ change touching that distinction preserves it).
 
 `_scan()` skips folders owned by a **different Box enterprise** using Box's
 authoritative `is_externally_owned` flag (requested in the `get_folder_items`
-`fields`), gated only on `want_collabs`: `if want_collabs and
-it.get("is_externally_owned")`. The rationale: this org is only a *guest* on an
+`fields`), gated only on `want_collabs`
+(`if want_collabs and it.get("is_externally_owned")`). The rationale: this org
+is only a *guest* on an
 externally-owned folder, cannot govern its collaborations, and the "external
 collaborators" on it are just the owner's own org accounts — noise, not a leak
 of *our* content. Skipped folders are reported under `skipped_externally_owned`
