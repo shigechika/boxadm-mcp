@@ -379,9 +379,15 @@ _SCAN_TTL = 60  # seconds
 
 # Bounded worker count for _scan()'s per-folder collaboration/item fan-out.
 _SCAN_CONCURRENCY_DEFAULT = 8
+_SCAN_CONCURRENCY_MIN = 1
+_SCAN_CONCURRENCY_MAX = 32
 
 
-def _scan_concurrency() -> int:
+def _clamp_concurrency(n: int) -> int:
+    return max(_SCAN_CONCURRENCY_MIN, min(_SCAN_CONCURRENCY_MAX, n))
+
+
+def _scan_concurrency(override: int | None = None) -> int:
     """Worker count for the per-folder collaboration/item fan-out in ``_scan()``.
 
     Box exposes no enterprise-wide "list every collaboration" API — the current
@@ -391,16 +397,21 @@ def _scan_concurrency() -> int:
     before ``max_folders`` on wide enterprises; a small concurrent pool makes the
     wall-clock dominated by the slowest bucket instead of the sum of all calls.
 
-    Overridable via ``BOX_SCAN_CONCURRENCY`` (clamped to 1..32). Modest by
-    default: the scan is I/O-bound, and Box's per-user rate limits are generous
-    but finite, so a handful of concurrent requests captures most of the win
-    without provoking 429s. An unparseable value falls back to the default.
+    Resolved from an explicit ``override`` (``_scan``'s ``concurrency`` arg) when
+    given, else ``BOX_SCAN_CONCURRENCY``, else the default. **Every** source is
+    clamped to 1..32 — so ``ThreadPoolExecutor`` never gets a 0/negative
+    ``max_workers`` (which raises) or an absurd thread count. Modest by default:
+    the scan is I/O-bound, and Box's per-user rate limits are generous but finite,
+    so a handful of concurrent requests captures most of the win without provoking
+    429s. An unparseable env value falls back to the default.
     """
+    if override is not None:
+        return _clamp_concurrency(override)
     raw = os.environ.get("BOX_SCAN_CONCURRENCY")
     if not raw:
         return _SCAN_CONCURRENCY_DEFAULT
     try:
-        return max(1, min(32, int(raw)))
+        return _clamp_concurrency(int(raw))
     except ValueError:
         return _SCAN_CONCURRENCY_DEFAULT
 
@@ -452,7 +463,10 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
     from concurrent.futures import ThreadPoolExecutor
 
     doms = allowed_domains()
-    workers = concurrency if concurrency is not None else _scan_concurrency()
+    # Resolve + clamp in one place so an explicit `concurrency` (e.g. from a test)
+    # is bounded to 1..32 exactly like BOX_SCAN_CONCURRENCY — a 0/negative value
+    # would otherwise make ThreadPoolExecutor raise.
+    workers = _scan_concurrency(concurrency)
 
     def _visit(entry: tuple) -> dict:
         """Fetch one folder's external collabs + public links + subfolders.

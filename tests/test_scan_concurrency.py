@@ -454,6 +454,24 @@ def test_scan_concurrency_env_parsing(monkeypatch, value, expected):
     assert server._scan_concurrency() == expected
 
 
+@pytest.mark.parametrize("override,expected", [(0, 1), (-5, 1), (1, 1), (8, 8), (32, 32), (999, 32)])
+def test_scan_concurrency_explicit_override_is_clamped(override, expected):
+    """An explicit concurrency (e.g. _scan's arg) is clamped to 1..32 just like the
+    env var, so ThreadPoolExecutor never gets a 0/negative or absurd worker count."""
+    assert server._scan_concurrency(override) == expected
+
+
+def test_scan_with_zero_concurrency_clamps_and_runs():
+    """_scan(concurrency=0) is clamped to 1 rather than crashing ThreadPoolExecutor."""
+    r, collab_ids, _ = _tree_router({"0": ["F0", "F1"]})
+    with r:
+        client, err = server._connect()
+        assert err is None
+        scan = server._scan(client, "0", max_folders=100, max_depth=1, want_collabs=True, concurrency=0)
+    assert scan["folders_scanned"] == 3  # root + F0 + F1
+    assert set(collab_ids) == {"F0", "F1"}
+
+
 def test_scan_default_concurrency_still_correct():
     """Tools that don't pass an explicit concurrency (use the env default) return
     the same results — smoke test that the default-path wiring works."""
