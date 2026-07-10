@@ -377,10 +377,40 @@ def _connect():
 _SCAN_CACHE: dict = {}
 _SCAN_TTL = 60  # seconds
 
+# Bounded worker count for _scan()'s per-folder collaboration/item fan-out.
+_SCAN_CONCURRENCY_DEFAULT = 8
+
+
+def _scan_concurrency() -> int:
+    """Worker count for the per-folder collaboration/item fan-out in ``_scan()``.
+
+    Box exposes no enterprise-wide "list every collaboration" API — the current
+    state of collaborations is only readable per folder
+    (``GET /folders/{id}/collaborations``), so a folder-by-folder fan-out is
+    unavoidable. Running those lookups sequentially made the walk time out well
+    before ``max_folders`` on wide enterprises; a small concurrent pool makes the
+    wall-clock dominated by the slowest bucket instead of the sum of all calls.
+
+    Overridable via ``BOX_SCAN_CONCURRENCY`` (clamped to 1..32). Modest by
+    default: the scan is I/O-bound, and Box's per-user rate limits are generous
+    but finite, so a handful of concurrent requests captures most of the win
+    without provoking 429s. An unparseable value falls back to the default.
+    """
+    raw = os.environ.get("BOX_SCAN_CONCURRENCY")
+    if not raw:
+        return _SCAN_CONCURRENCY_DEFAULT
+    try:
+        return max(1, min(32, int(raw)))
+    except ValueError:
+        return _SCAN_CONCURRENCY_DEFAULT
+
 
 def _cached_scan(client, root_folder_id: str, max_folders: int, max_depth: int, want_collabs: bool) -> dict:
     import time
 
+    # Concurrency is deliberately NOT part of the key: it changes how fast the
+    # traversal runs, never what it returns, so two callers with different pool
+    # sizes still share one memoized result correctly.
     key = (root_folder_id, max_folders, max_depth, want_collabs)
     hit = _SCAN_CACHE.get(key)
     if hit and (time.time() - hit[0]) < _SCAN_TTL:
@@ -390,38 +420,57 @@ def _cached_scan(client, root_folder_id: str, max_folders: int, max_depth: int, 
     return result
 
 
-def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want_collabs: bool = True) -> dict:
+def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want_collabs: bool = True, concurrency: int | None = None) -> dict:
     """BFS over folders the authenticating (co-admin) user can see, collecting
     public shared links and (when ``want_collabs``) external collaborations in one
     pass.
 
     Bounded by ``max_folders`` / ``max_depth``; sets ``capped`` when the folder
     cap is hit (so coverage is never silently partial). A ``visited`` set avoids
-    re-fetching a folder reached twice. Per-folder API errors (e.g. 403/404) are
-    tolerated and skipped. ``want_collabs=False`` skips the per-folder
-    collaborations call entirely (e.g. for public_shared_links, which doesn't need
-    it) — a real API-call saving at scale.
+    re-fetching a folder reached twice. ``want_collabs=False`` skips the
+    per-folder collaborations call entirely (e.g. for public_shared_links, which
+    doesn't need it) — a real API-call saving at scale.
+
+    Each folder's per-folder work (its ``get_folder_collaborations`` call plus its
+    ``get_folder_items`` paging) is independent, so a whole BFS frontier is
+    fetched through a bounded ``ThreadPoolExecutor`` (``concurrency``, default
+    ``_scan_concurrency()``): the walk drains one depth level at a time, up to the
+    remaining folder budget, and processes that batch concurrently — so wall-clock
+    is dominated by the slowest bucket rather than the sum of every call. Workers
+    return only their own partial results and hold no shared state; results are
+    merged (and subfolders enqueued) in input order, so the visited set,
+    ``folders_scanned`` and output ordering are identical to a sequential BFS.
+
+    Per-folder API errors (e.g. 403 on a folder the co-admin can list but not read
+    collaborations for, or a transient 429) are tolerated and skipped, but counted
+    — once per folder, so ``fetch_errors`` never exceeds ``folders_scanned`` — and
+    surfaced by the tools, so a folder whose lookup failed is disclosed rather than
+    silently under-reported (the same contract ``capped`` gives for the budget/
+    window caps).
     """
     from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
 
     doms = allowed_domains()
-    ext_collabs: list[dict] = []
-    public_links: list[dict] = []
-    skipped_external: list[dict] = []
-    visited: set[str] = set()
-    seen = 0
-    capped = False
-    # queue items: (folder_id, name, owner_login, depth). Root "0" is synthetic.
-    queue = deque([(root_folder_id, None, None, 0)])
-    while queue:
-        if seen >= max_folders:
-            capped = True
-            break
-        fid, fname, fowner, depth = queue.popleft()
-        if fid in visited:
-            continue
-        visited.add(fid)
-        seen += 1
+    workers = concurrency if concurrency is not None else _scan_concurrency()
+
+    def _visit(entry: tuple) -> dict:
+        """Fetch one folder's external collabs + public links + subfolders.
+
+        Runs in a worker thread and returns only this folder's partial results
+        (no shared mutable state), so the caller can merge them in deterministic
+        BFS order. Mirrors the sequential body's two error boundaries: a failed
+        collaborations call and a failed items page are each tolerated and counted.
+        """
+        fid, fname, fowner, depth = entry
+        ext_c: list[dict] = []
+        pub: list[dict] = []
+        skip: list[dict] = []
+        subs: list[tuple] = []
+        # Per-FOLDER failure flag, not a call counter: a folder whose collaborations
+        # AND items calls both fail still counts once, so the total never exceeds
+        # folders_scanned (fetch_errors = "folders with a failed lookup").
+        errors = 0
 
         # External collaborations on this folder (root "0" has none).
         if want_collabs and fid != "0":
@@ -433,7 +482,7 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                     # group (or login-less entry) — NOT an external person, so skip
                     # (unlike anonymous *access*, where no login = external).
                     if who and "@" in who and is_external(who, doms):
-                        ext_collabs.append(
+                        ext_c.append(
                             {
                                 "folder_id": fid,
                                 "folder_name": fname,
@@ -446,10 +495,10 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                             }
                         )
             except BoxError:
-                pass
+                errors = 1
 
         # Items: capture public shared links (files AND subfolders, via this
-        # listing) and enqueue subfolders for the next depth.
+        # listing) and collect subfolders for the next depth.
         if depth < max_depth:
             offset = 0
             while True:
@@ -461,13 +510,14 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                         offset=offset,
                     )
                 except BoxError:
+                    errors = 1
                     break
                 entries = resp.get("entries", [])
                 for it in entries:
                     owner = (it.get("owned_by") or {}).get("login")
                     sl = it.get("shared_link")
                     if sl and sl.get("access") in PUBLIC_ACCESS:
-                        public_links.append(
+                        pub.append(
                             {
                                 "item_type": it.get("type"),
                                 "item_id": it.get("id"),
@@ -498,17 +548,62 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
                         # Scoped to the collaborator audit; public_shared_links
                         # (want_collabs=False) keeps its prior full traversal.
                         if want_collabs and it.get("is_externally_owned"):
-                            skipped_external.append({"folder_id": it.get("id"), "folder_name": it.get("name"), "owner": owner})
+                            skip.append({"folder_id": it.get("id"), "folder_name": it.get("name"), "owner": owner})
                             continue
-                        queue.append((it.get("id"), it.get("name"), owner, depth + 1))
+                        subs.append((it.get("id"), it.get("name"), owner, depth + 1))
                 total = resp.get("total_count")
                 offset += len(entries)
                 if not entries or (total is not None and offset >= total):
                     break
 
+        return {"ext": ext_c, "pub": pub, "skip": skip, "subs": subs, "errors": errors}
+
+    ext_collabs: list[dict] = []
+    public_links: list[dict] = []
+    skipped_external: list[dict] = []
+    visited: set[str] = set()
+    seen = 0
+    capped = False
+    fetch_errors = 0
+    # queue items: (folder_id, name, owner_login, depth). Root "0" is synthetic.
+    # BFS enqueues one depth level at a time, so the queue's contents at the top of
+    # each iteration are exactly the current frontier — draining it (up to budget)
+    # and fetching that batch concurrently is a level-synchronous parallel BFS.
+    queue = deque([(root_folder_id, None, None, 0)])
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while queue:
+            if seen >= max_folders:
+                capped = True
+                break
+            # Drain the current frontier into a batch, deduping via `visited` and
+            # bounded by the remaining folder budget. A duplicate is popped without
+            # consuming a batch slot or budget — matching the sequential body's
+            # pop -> "if visited: continue" -> count.
+            batch: list[tuple] = []
+            while queue and seen + len(batch) < max_folders:
+                entry = queue.popleft()
+                if entry[0] in visited:
+                    continue
+                visited.add(entry[0])
+                batch.append(entry)
+            seen += len(batch)
+            if not batch:
+                break
+            # ThreadPoolExecutor.map preserves input order, so merging results and
+            # enqueuing discovered subfolders below reproduces a sequential BFS's
+            # ordering exactly — only the I/O runs concurrently.
+            for res in pool.map(_visit, batch):
+                ext_collabs.extend(res["ext"])
+                public_links.extend(res["pub"])
+                skipped_external.extend(res["skip"])
+                fetch_errors += res["errors"]
+                for sub in res["subs"]:
+                    queue.append(sub)
+
     return {
         "folders_scanned": seen,
         "capped": capped,
+        "fetch_errors": fetch_errors,
         "external_collaborations": ext_collabs,
         "public_shared_links": public_links,
         "skipped_externally_owned": skipped_external,
@@ -538,10 +633,12 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
 
     Coverage note: limited to content the co-admin user can access (not provably
     100% of the enterprise) and to the depth/folders caps. Returns
-    ``folders_scanned``, ``capped``, ``count``, ``external_collaborators``
-    (folder, owner, collaborator, role, status, expires_at), and
-    ``skipped_externally_owned`` (folder_id, folder_name, owner). On failure
-    returns ``{"error": ...}``.
+    ``folders_scanned``, ``capped``, ``fetch_errors`` (count of folders whose
+    lookup hit an API error, e.g. 403/429 — coverage is complete only when
+    ``capped`` is false AND ``fetch_errors`` is 0), ``count``,
+    ``external_collaborators`` (folder, owner, collaborator, role, status,
+    expires_at), and ``skipped_externally_owned`` (folder_id, folder_name,
+    owner). On failure returns ``{"error": ...}``.
     """
     client, err = _connect()
     if err:
@@ -550,6 +647,7 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
     return {
         "folders_scanned": scan["folders_scanned"],
         "capped": scan["capped"],
+        "fetch_errors": scan["fetch_errors"],
         "count": len(scan["external_collaborations"]),
         "external_collaborators": scan["external_collaborations"],
         "skipped_externally_owned": scan["skipped_externally_owned"],
@@ -570,7 +668,9 @@ def public_shared_links(root_folder_id: str = "0", max_folders: int = 150, max_d
         max_depth: Folder recursion depth (default 1 = top-level only; raise to reach file links inside folders).
 
     Coverage note: limited to content the co-admin user can access and to the
-    caps. Returns ``folders_scanned``, ``capped``, ``count``, and
+    caps. Returns ``folders_scanned``, ``capped``, ``fetch_errors`` (count of
+    folders whose lookup hit an API error; coverage is complete only when
+    ``capped`` is false AND ``fetch_errors`` is 0), ``count``, and
     ``public_shared_links`` (item type/id/name, owner, access, can_download). On
     failure returns ``{"error": ...}``.
     """
@@ -582,6 +682,7 @@ def public_shared_links(root_folder_id: str = "0", max_folders: int = 150, max_d
     return {
         "folders_scanned": scan["folders_scanned"],
         "capped": scan["capped"],
+        "fetch_errors": scan["fetch_errors"],
         "count": len(scan["public_shared_links"]),
         "public_shared_links": scan["public_shared_links"],
     }
@@ -616,7 +717,9 @@ def top_external_sharers(root_folder_id: str = "0", max_folders: int = 150, max_
         top: How many owners to return (default 20).
 
     Coverage note: limited to the co-admin user's visible content and the caps.
-    Returns ``folders_scanned``, ``capped``, and ``top_external_sharers`` (owner,
+    Returns ``folders_scanned``, ``capped``, ``fetch_errors`` (count of folders
+    whose lookup hit an API error; coverage is complete only when ``capped`` is
+    false AND ``fetch_errors`` is 0), and ``top_external_sharers`` (owner,
     external_collaborations, public_links, total). On failure ``{"error": ...}``.
     """
     client, err = _connect()
@@ -627,6 +730,7 @@ def top_external_sharers(root_folder_id: str = "0", max_folders: int = 150, max_
     return {
         "folders_scanned": scan["folders_scanned"],
         "capped": scan["capped"],
+        "fetch_errors": scan["fetch_errors"],
         "top_external_sharers": _rank_external_sharers(scan)[:top],
     }
 
@@ -659,6 +763,7 @@ def daily_brief(since_hours: int = 24, max_events: int = 5000, max_folders: int 
         "exposure": {
             "folders_scanned": scan["folders_scanned"],
             "capped": scan["capped"],
+            "fetch_errors": scan["fetch_errors"],
             "external_collaborations_count": len(scan["external_collaborations"]),
             "public_shared_links_count": len(scan["public_shared_links"]),
             "external_collaborations_sample": scan["external_collaborations"][:top],

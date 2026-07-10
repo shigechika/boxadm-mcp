@@ -94,6 +94,7 @@ pip install -e .
 | `BOX_OAUTH_REDIRECT_URI` | | oauth redirect. Default `http://localhost:8787/callback` |
 | `BOX_TOKEN_CACHE` | | oauth token cache path. Default `~/.config/boxadm-mcp/token.json` |
 | `BOX_API_BASE` | | Default `https://api.box.com` |
+| `BOX_SCAN_CONCURRENCY` | | Parallel per-folder lookups in the enumeration scan. Default `8`, clamped `1`–`32` |
 | `BOX_ALLOWED_DOMAINS` | ✓ | Internal email domains (comma-separated). No default — every address counts as external until you set this |
 
 Keep secrets out of `.mcp.json` (e.g. in a local env file sourced before
@@ -109,6 +110,12 @@ and be safely committed.
   co-admin account (not a guaranteed 100% of the enterprise), plus
   `max_folders`/`max_depth` limits (surfaced via `capped`). Requires the
   **Read all files and folders** scope.
+- The scan fans its per-folder lookups out concurrently
+  (`BOX_SCAN_CONCURRENCY`), since Box has no enterprise-wide collaboration
+  listing — this widens how many folders finish inside a tool-call timeout,
+  but coverage is still bounded by the caps. A folder dropped by a per-folder
+  API error (e.g. a 403 or a transient 429) is counted in `fetch_errors`:
+  coverage is complete only when `capped` is false **and** `fetch_errors` is 0.
 - Enumeration tools share a short-TTL scan memo across calls;
   `public_shared_links` skips collaboration calls entirely (optimization).
 

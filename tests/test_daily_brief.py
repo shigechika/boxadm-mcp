@@ -79,6 +79,7 @@ def test_daily_brief_combines_access_and_exposure(monkeypatch):
     assert exp["external_collaborations_count"] == 1
     assert exp["public_shared_links_count"] == 1  # F1 open link
     assert exp["top_external_sharers"][0]["owner"] == "ownerA@internal.example"
+    assert exp["fetch_errors"] == 0  # clean run: every folder fetched
 
 
 def test_daily_brief_missing_env(monkeypatch):

@@ -82,6 +82,19 @@ findings". A new probe or tool that adds a page/count cap without wiring a
 `capped` (or equivalent) flag through to the tool's return value is a
 correctness bug, not a style nit.
 
+`_scan()` runs its per-folder collaboration/item lookups concurrently
+(bounded `ThreadPoolExecutor`, `BOX_SCAN_CONCURRENCY`), which makes a
+per-folder API error (403/429/…) more likely at scale. Those errors are
+tolerated but counted in `fetch_errors` and surfaced by every collab/exposure
+tool — the same "no silent partial coverage" contract as `capped`, applied to
+the error axis (coverage is complete only when `capped` is false **and**
+`fetch_errors` is 0). Flag any change that swallows a per-folder failure
+without counting it, or that drops `fetch_errors` from a tool's return value.
+The concurrency must not change results: the walk stays a level-synchronous
+BFS with an order-preserving merge, so `folders_scanned`, the visited set, and
+output ordering match a sequential walk — a change that reorders or races
+those is a regression even if the counts happen to match.
+
 ## 5. `BOX_ALLOWED_DOMAINS` has no built-in default — verify new code doesn't reintroduce one
 
 `config.py`'s `allowed_domains()` returns an empty list when

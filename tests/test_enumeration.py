@@ -84,6 +84,7 @@ def test_public_shared_links_lists_open_and_skips_collab_calls():
     ids = {p["item_id"] for p in out["public_shared_links"]}
     assert ids == {"F1", "X"}  # F2 has no link
     assert counts["collab"] == 0  # optimization: no collaboration calls when not needed
+    assert out["fetch_errors"] == 0  # clean run surfaces the disclosure field
 
 
 def test_top_external_sharers_ranks_owner():
@@ -94,6 +95,7 @@ def test_top_external_sharers_ranks_owner():
     assert top["owner"] == "ownerA@example.com"
     # ownerA: 2 external collabs (gmail + invite, both on F1) + 2 public links (F1, X) = 4
     assert top["external_collaborations"] == 2 and top["public_links"] == 2 and top["total"] == 4
+    assert out["fetch_errors"] == 0  # clean run surfaces the disclosure field
 
 
 def test_scan_memo_shared_between_collab_tools():
