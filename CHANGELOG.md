@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6](https://github.com/shigechika/boxadm-mcp/compare/v0.3.5...v0.3.6) (2026-07-10)
+
+
+### Performance
+
+* parallelize per-folder collaboration lookups in _scan() ([#9](https://github.com/shigechika/boxadm-mcp/issues/9)) ([5922581](https://github.com/shigechika/boxadm-mcp/commit/5922581f8a7c06dd492693327761c421ad9482d4))
+
 ## [0.3.5](https://github.com/shigechika/boxadm-mcp/compare/v0.3.4...v0.3.5) (2026-07-09)
 
 
