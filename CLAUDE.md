@@ -36,7 +36,20 @@ test runs.
   `(root_folder_id, max_folders, max_depth, want_collabs)`, so
   `external_collaborators`/`top_external_sharers` (same `want_collabs=True`
   key) share one traversal instead of re-walking; cleared on
-  `reset_client()`.
+  `reset_client()`. `_scan()` fans the per-folder
+  `get_folder_collaborations` + `get_folder_items` calls out across a bounded
+  `ThreadPoolExecutor` (`BOX_SCAN_CONCURRENCY`, default 8, clamped 1..32),
+  draining one BFS level at a time up to the folder budget — Box has no
+  enterprise-wide "list all collaborations" API, so the per-folder fan-out is
+  unavoidable and concurrency is the only lever. Concurrency is deliberately
+  **not** in the cache key (it changes speed, never results), and
+  `executor.map`'s order-preserving merge keeps the visited set,
+  `folders_scanned`, and output ordering identical to a sequential walk.
+  Per-folder API failures (403/429/…) are tolerated but counted in
+  `fetch_errors` and surfaced by every collab/exposure tool, so a folder
+  dropped by an error is disclosed the same way `capped` discloses a budget
+  cut — coverage is complete only when `capped` is false AND `fetch_errors`
+  is 0.
 - `boxadm_mcp/client.py` — two read-only client classes sharing
   `_FolderReadMixin`: `BoxClient` (Client Credentials Grant, server-to-server)
   and `BoxOAuthClient` (OAuth 2.0 user auth with an auto-refreshed,

@@ -223,8 +223,19 @@ class BoxClient(_FolderReadMixin):
         self._token_deadline = 0.0  # monotonic clock deadline
 
     def _ensure_token(self) -> str:
-        if self._token and time.monotonic() < self._token_deadline:
-            return self._token
+        # Snapshot BOTH the token and its deadline before the guard/return:
+        # server.py's _scan drives _get from many worker threads at once, and a
+        # concurrent 401 handler may reset self._token to None (and its deadline to
+        # 0.0) between this check and the return. Reading locals means the guard
+        # judges one consistent (token, deadline) pair and can never return a token
+        # another thread just nulled — no "Bearer None" request. The two reads are
+        # still not atomic, but the only residual is a benign redundant fetch, or a
+        # stale token that self-heals via _get's 401 retry — never a bad token
+        # presented as fresh, and never the OAuth single-use-refresh class (CCG has
+        # no refresh token).
+        token, deadline = self._token, self._token_deadline
+        if token and time.monotonic() < deadline:
+            return token
         data = {
             "grant_type": "client_credentials",
             "client_id": self._client_id,
@@ -241,11 +252,12 @@ class BoxClient(_FolderReadMixin):
         except httpx.HTTPError as e:
             raise BoxAuthError(f"token request error: {e}") from e
         try:
-            self._token = body["access_token"]
+            token = body["access_token"]
         except (KeyError, TypeError) as e:
             raise BoxAuthError("token response missing access_token") from e
+        self._token = token
         self._token_deadline = time.monotonic() + max(0, int(body.get("expires_in", 3600)) - TOKEN_REFRESH_SKEW)
-        return self._token
+        return token
 
     def authenticate(self) -> bool:
         """Obtain (or refresh) the CCG token. Returns True on success, else raises."""
