@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/shigechika/boxadm-mcp/compare/v0.3.7...v0.4.0) (2026-07-11)
+
+
+### Features
+
+* scan-level wall-clock deadline + per-request timeout knob ([#15](https://github.com/shigechika/boxadm-mcp/issues/15)) ([bf0cca8](https://github.com/shigechika/boxadm-mcp/commit/bf0cca808ed1c12fd5e5aeb4845e25d8a93e9039))
+
 ## [0.3.7](https://github.com/shigechika/boxadm-mcp/compare/v0.3.6...v0.3.7) (2026-07-11)
 
 
