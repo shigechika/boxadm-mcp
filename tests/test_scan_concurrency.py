@@ -33,6 +33,8 @@ def _clock_stub(ticks):
     ``time.monotonic`` directly: the latter mutates the shared module and would also drive the
     client's own retry clock (same ``time`` object), consuming ticks unpredictably.
     """
+    if not ticks:
+        raise ValueError("ticks must be non-empty (monotonic holds the last value)")
     seq = iter(ticks)
     last = {"v": ticks[-1]}
 
@@ -604,6 +606,8 @@ def test_scan_deadline_disabled_completes_full_walk():
         ("0", float("inf")),  # disabled
         ("-1", float("inf")),  # disabled
         ("nope", server._SCAN_DEADLINE_DEFAULT),  # unparseable → default
+        ("nan", server._SCAN_DEADLINE_DEFAULT),  # parses as float but non-finite → default (not silently disabled)
+        ("inf", server._SCAN_DEADLINE_DEFAULT),  # non-finite → default
     ],
 )
 def test_scan_deadline_env_parsing(monkeypatch, value, expected):

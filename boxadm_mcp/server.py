@@ -8,6 +8,7 @@ Read-only. Tools:
 - ``daily_brief`` — morning synthesis of access (events) + exposure (enumeration)
 """
 
+import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -419,7 +420,8 @@ def _scan_deadline(override: float | None = None) -> float:
     Resolved from an explicit ``override`` (``_scan``'s ``deadline_seconds`` arg) when
     given, else ``BOX_SCAN_DEADLINE``, else ``_SCAN_DEADLINE_DEFAULT``. A value of 0 or
     negative (from either source) disables the deadline (returns ``inf``), for local use
-    where there is no gateway timeout to beat. An unparseable env value falls back to the
+    where there is no gateway timeout to beat. An unparseable or non-finite env value
+    (``nan``/``inf`` both parse as floats but are not a meaningful budget) falls back to the
     default. When the budget is hit the scan stops starting new BFS levels and returns the
     partial with ``capped=True`` — the same disclosure ``capped`` gives for the folder cap.
     """
@@ -431,6 +433,8 @@ def _scan_deadline(override: float | None = None) -> float:
     try:
         val = float(raw)
     except ValueError:
+        return _SCAN_DEADLINE_DEFAULT
+    if not math.isfinite(val):  # e.g. "nan"/"inf" — not a usable budget, don't silently disable
         return _SCAN_DEADLINE_DEFAULT
     return val if val > 0 else float("inf")
 
