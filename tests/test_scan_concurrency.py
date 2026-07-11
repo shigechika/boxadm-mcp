@@ -14,6 +14,8 @@ which would be flaky under CI load.
 """
 
 import threading
+import time as _time
+import types
 from collections import Counter
 
 import httpx
@@ -21,6 +23,26 @@ import pytest
 import respx
 
 from boxadm_mcp import server
+
+
+def _clock_stub(ticks):
+    """A stand-in for the ``time`` module whose ``monotonic()`` yields ``ticks`` (holding
+    the last value after they run out) and delegates ``time``/``sleep`` to the real module.
+
+    Patch it onto ``server``'s namespace (``setattr(server, "time", ...)``) rather than onto
+    ``time.monotonic`` directly: the latter mutates the shared module and would also drive the
+    client's own retry clock (same ``time`` object), consuming ticks unpredictably.
+    """
+    if not ticks:
+        raise ValueError("ticks must be non-empty (monotonic holds the last value)")
+    seq = iter(ticks)
+    last = {"v": ticks[-1]}
+
+    def monotonic():
+        last["v"] = next(seq, last["v"])
+        return last["v"]
+
+    return types.SimpleNamespace(monotonic=monotonic, time=_time.time, sleep=_time.sleep)
 
 
 def _call(tool):
@@ -535,3 +557,105 @@ def test_scan_default_concurrency_still_correct():
     assert out["fetch_errors"] == 0
     assert set(counts) == {"F0", "F1", "F2"}  # each folder queried exactly once
     assert all(v == 1 for v in counts.values())
+
+
+# --------------------------------------------------------------------------
+# Scan-level wall-clock deadline (issue #13): a scan that runs past its budget
+# stops between BFS levels and returns a disclosed partial (capped=True).
+# --------------------------------------------------------------------------
+def test_scan_deadline_cuts_scan_short(monkeypatch):
+    """When the deadline is hit between BFS levels, _scan stops starting new levels and
+    returns capped=True with the folders scanned so far — the in-flight level completes,
+    but the next one is never dispatched, so it's a clean disclosed partial."""
+    # The scan reads the clock once at start and once per BFS-level pre-check. Use a NON-ZERO
+    # base (1000) so elapsed = monotonic() - start, not monotonic() itself: start=1000, the
+    # level-1 and level-2 pre-checks see 1000 (elapsed 0 → proceed), the level-3 pre-check
+    # sees 2000 (elapsed 1000 ≫ the 10s budget → cut). A base of 0 would let a buggy
+    # `monotonic() >= deadline` (missing `- start`) pass this test too. Faking server.time
+    # (not time.monotonic) keeps the client's own retry clock real, so it isn't consumed here.
+    monkeypatch.setattr(server, "time", _clock_stub([1000.0, 1000.0, 1000.0, 2000.0]))
+
+    # root -> A,B (depth 1) -> A1,B1 (depth 2). The cut lands before depth 2 is scanned.
+    r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
+    with r:
+        client, err = server._connect()
+        assert err is None
+        scan = server._scan(client, "0", max_folders=100, max_depth=3, want_collabs=True, deadline_seconds=10, concurrency=4)
+
+    assert scan["capped"] is True
+    assert scan["folders_scanned"] == 3  # root + A + B; A1/B1 cut by the deadline
+    assert sorted(collab_ids) == ["A", "B"]  # depth-2 folders never had collaborations fetched
+    assert {c["folder_id"] for c in scan["external_collaborations"]} == {"A", "B"}
+
+
+def test_scan_deadline_disabled_completes_full_walk():
+    """deadline_seconds<=0 disables the deadline (inf), so the walk runs to completion."""
+    r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
+    with r:
+        client, err = server._connect()
+        scan = server._scan(client, "0", max_folders=100, max_depth=3, want_collabs=True, deadline_seconds=0, concurrency=4)
+    assert scan["capped"] is False
+    assert scan["folders_scanned"] == 5  # root + A + B + A1 + B1
+    assert sorted(collab_ids) == ["A", "A1", "B", "B1"]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, server._SCAN_DEADLINE_DEFAULT),
+        ("30", 30.0),
+        ("12.5", 12.5),
+        ("0", float("inf")),  # disabled
+        ("-1", float("inf")),  # disabled
+        ("nope", server._SCAN_DEADLINE_DEFAULT),  # unparseable → default
+        ("nan", server._SCAN_DEADLINE_DEFAULT),  # parses as float but non-finite → default (not silently disabled)
+        ("inf", server._SCAN_DEADLINE_DEFAULT),  # non-finite → default
+    ],
+)
+def test_scan_deadline_env_parsing(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("BOX_SCAN_DEADLINE", raising=False)
+    else:
+        monkeypatch.setenv("BOX_SCAN_DEADLINE", value)
+    assert server._scan_deadline() == expected
+
+
+@pytest.mark.parametrize("override,expected", [(45.0, 45.0), (5, 5.0), (0, float("inf")), (-2, float("inf"))])
+def test_scan_deadline_explicit_override(override, expected):
+    """An explicit deadline_seconds wins over the env; 0/negative disables (inf)."""
+    assert server._scan_deadline(override) == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, server._HTTP_TIMEOUT_DEFAULT),
+        ("15", 15.0),
+        ("1.5", 1.5),  # fractional honored — the knob exists to LOWER the timeout; must not fall back to 30
+        ("0", server._HTTP_TIMEOUT_DEFAULT),  # a literal 0 = httpx 0s (fail-instantly) → treated as unset, use default
+        ("-5", server._HTTP_TIMEOUT_DEFAULT),
+        ("nan", server._HTTP_TIMEOUT_DEFAULT),  # non-finite → default
+        ("inf", server._HTTP_TIMEOUT_DEFAULT),  # non-finite → default
+        ("nope", server._HTTP_TIMEOUT_DEFAULT),  # unparseable → default
+    ],
+)
+def test_http_timeout_env_parsing(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("BOX_HTTP_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("BOX_HTTP_TIMEOUT", value)
+    assert server._http_timeout() == expected
+
+
+def test_http_timeout_wired_into_client(monkeypatch):
+    """BOX_HTTP_TIMEOUT actually reaches the constructed client's httpx timeout (end-to-end).
+
+    Guards the _http_timeout() -> _client() -> httpx.Client(timeout=...) wiring: a refactor
+    that drops or mis-passes the kwarg would otherwise leave every other test green.
+    """
+    monkeypatch.setenv("BOX_HTTP_TIMEOUT", "12.5")
+    server.reset_client()  # force a fresh client that reads the env
+    client = server._client()
+    # httpx expands a scalar timeout to a Timeout with all four phases set to that value.
+    assert client._http.timeout.read == 12.5
+    assert client._http.timeout.connect == 12.5

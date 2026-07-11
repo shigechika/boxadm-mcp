@@ -95,6 +95,8 @@ pip install -e .
 | `BOX_TOKEN_CACHE` | | oauth token cache path. Default `~/.config/boxadm-mcp/token.json` |
 | `BOX_API_BASE` | | Default `https://api.box.com` |
 | `BOX_SCAN_CONCURRENCY` | | Parallel per-folder lookups in the enumeration scan. Default `8`, clamped `1`–`32` |
+| `BOX_SCAN_DEADLINE` | | Soft wall-clock budget (seconds) for one enumeration scan. Default `45`; `0`/negative disables it. When hit, the scan returns a disclosed partial (`capped=true`) instead of running until the tool call times out |
+| `BOX_HTTP_TIMEOUT` | | Per-request HTTP timeout (seconds). Default `30`. Lower it (with `BOX_SCAN_DEADLINE`) so one slow endpoint can't stretch the final in-flight scan batch past a gateway timeout |
 | `BOX_ALLOWED_DOMAINS` | ✓ | Internal email domains (comma-separated). No default — every address counts as external until you set this |
 
 Keep secrets out of `.mcp.json` (e.g. in a local env file sourced before
