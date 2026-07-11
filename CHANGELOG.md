@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.7](https://github.com/shigechika/boxadm-mcp/compare/v0.3.6...v0.3.7) (2026-07-11)
+
+
+### Bug Fixes
+
+* retry 429/transient errors with backoff in the read path ([#12](https://github.com/shigechika/boxadm-mcp/issues/12)) ([7c4f2d8](https://github.com/shigechika/boxadm-mcp/commit/7c4f2d824a8b6697149527a3abe98b9c65ff3ace))
+
 ## [0.3.6](https://github.com/shigechika/boxadm-mcp/compare/v0.3.5...v0.3.6) (2026-07-10)
 
 

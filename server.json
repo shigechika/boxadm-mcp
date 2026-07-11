@@ -7,12 +7,12 @@
     "url": "https://github.com/shigechika/boxadm-mcp",
     "source": "github"
   },
-  "version": "0.3.6",
+  "version": "0.3.7",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "boxadm-mcp",
-      "version": "0.3.6",
+      "version": "0.3.7",
       "transport": {
         "type": "stdio"
       }
