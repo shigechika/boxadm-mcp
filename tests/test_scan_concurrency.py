@@ -157,9 +157,9 @@ def test_fetch_errors_capped_at_one_per_folder():
         if path == "/2.0/folders/0/items":
             return httpx.Response(200, json=_root_items(["A"]))
         if path == "/2.0/folders/A/collaborations":
-            return httpx.Response(500, json={"message": "err"})  # fails
+            return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         if path == "/2.0/folders/A/items":
-            return httpx.Response(503, json={"message": "err"})  # also fails
+            return httpx.Response(403, json={"message": "forbidden"})  # also fails (403, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -183,7 +183,7 @@ def test_public_shared_links_surfaces_fetch_errors():
         if path == "/2.0/folders/0/items":
             return httpx.Response(200, json=_root_items(["A"]))
         if path == "/2.0/folders/A/items":
-            return httpx.Response(500, json={"message": "err"})  # A's listing fails
+            return httpx.Response(403, json={"message": "forbidden"})  # A's listing fails (403, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -393,7 +393,7 @@ def test_scan_counts_and_surfaces_fetch_errors():
         if path == "/2.0/folders/FOK/collaborations":
             return httpx.Response(200, json=EXT_COLLAB)
         if path == "/2.0/folders/FERR/collaborations":
-            return httpx.Response(500, json={"message": "server error"})  # transient failure
+            return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -416,7 +416,7 @@ def test_item_page_failure_counts_as_fetch_error():
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(503, json={"message": "unavailable"})
+            return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)

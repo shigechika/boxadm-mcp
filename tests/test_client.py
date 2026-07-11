@@ -3,12 +3,24 @@
 import httpx
 import respx
 
-from boxadm_mcp.client import BoxAuthError, BoxClient
+import boxadm_mcp.client as client_mod
+from boxadm_mcp.client import BoxAuthError, BoxClient, BoxError
 from tests.conftest import EVENTS_URL, TOKEN_URL, make_router
 
 
 def _client():
     return BoxClient("cid", "secret", "12345", api_base="https://api.box.com")
+
+
+def _stub_sleep(monkeypatch) -> list:
+    """Record retry backoff durations without actually waiting (keeps retry tests instant)."""
+    slept: list = []
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: slept.append(s))
+    return slept
+
+
+def _token_ok(r):
+    return r.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "t", "expires_in": 3600}))
 
 
 def test_authenticate_requests_token_with_enterprise_subject():
@@ -88,3 +100,82 @@ def test_get_retries_once_on_401_with_fresh_token():
     assert out["entries"][0]["event_id"] == "x"
     assert events_route.call_count == 2  # first 401, then retried
     assert token_route.call_count == 2  # token refreshed after the 401
+
+
+# --- read-path retry/backoff on 429 / transient errors (issue #11) ---
+
+
+def test_get_retries_429_then_succeeds(monkeypatch):
+    slept = _stub_sleep(monkeypatch)
+    with respx.mock(assert_all_called=False) as r:
+        _token_ok(r)
+        route = r.get(EVENTS_URL).mock(
+            side_effect=[
+                httpx.Response(429, json={"code": "rate_limited"}),
+                httpx.Response(200, json={"entries": [{"event_id": "ok"}]}),
+            ]
+        )
+        out = _client().get_admin_events(limit=1)
+    assert out["entries"][0]["event_id"] == "ok"
+    assert route.call_count == 2  # 429, then a successful retry
+    assert len(slept) == 1  # one backoff between the two attempts
+
+
+def test_get_honors_retry_after_header(monkeypatch):
+    slept = _stub_sleep(monkeypatch)
+    with respx.mock(assert_all_called=False) as r:
+        _token_ok(r)
+        r.get(EVENTS_URL).mock(
+            side_effect=[
+                httpx.Response(429, headers={"Retry-After": "3"}, json={}),
+                httpx.Response(200, json={"entries": []}),
+            ]
+        )
+        _client().get_admin_events(limit=1)
+    assert slept == [3.0]  # server's Retry-After honored (<= _MAX_BACKOFF), not jittered backoff
+
+
+def test_get_retries_transient_5xx_then_succeeds(monkeypatch):
+    slept = _stub_sleep(monkeypatch)
+    with respx.mock(assert_all_called=False) as r:
+        _token_ok(r)
+        route = r.get(EVENTS_URL).mock(
+            side_effect=[
+                httpx.Response(503, json={}),
+                httpx.Response(500, json={}),
+                httpx.Response(200, json={"entries": []}),
+            ]
+        )
+        _client().get_admin_events(limit=1)
+    assert route.call_count == 3
+    assert len(slept) == 2
+
+
+def test_get_exhausts_retries_then_raises(monkeypatch):
+    slept = _stub_sleep(monkeypatch)
+    with respx.mock(assert_all_called=False) as r:
+        _token_ok(r)
+        route = r.get(EVENTS_URL).mock(return_value=httpx.Response(429, json={}))
+        raised = False
+        try:
+            _client().get_admin_events(limit=1)
+        except BoxError:
+            raised = True
+    assert raised
+    assert route.call_count == 5  # _MAX_RETRIES attempts
+    assert len(slept) == 4  # backoff between attempts, none after the final one
+
+
+def test_get_403_fails_fast_without_retry(monkeypatch):
+    slept = _stub_sleep(monkeypatch)
+    with respx.mock(assert_all_called=False) as r:
+        _token_ok(r)
+        route = r.get(EVENTS_URL).mock(return_value=httpx.Response(403, json={"code": "forbidden"}))
+        raised = False
+        try:
+            _client().get_admin_events(limit=1)
+        except BoxError:
+            raised = True
+    assert raised
+    assert route.call_count == 1  # a permission 403 is not retried
+    assert slept == []
