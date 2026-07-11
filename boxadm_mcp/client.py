@@ -329,7 +329,7 @@ class BoxClient(_FolderReadMixin):
         enterprise_id: str,
         *,
         api_base: str = DEFAULT_API_BASE,
-        timeout: int = DEFAULT_TIMEOUT,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
         self._client_id = client_id
         self._client_secret = client_secret
@@ -422,7 +422,7 @@ class BoxOAuthClient(_FolderReadMixin):
         *,
         token_cache: str | None = None,
         api_base: str = DEFAULT_API_BASE,
-        timeout: int = DEFAULT_TIMEOUT,
+        timeout: float = DEFAULT_TIMEOUT,
     ):
         self._client_id = client_id
         self._client_secret = client_secret

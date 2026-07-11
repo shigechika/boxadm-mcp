@@ -567,11 +567,13 @@ def test_scan_deadline_cuts_scan_short(monkeypatch):
     """When the deadline is hit between BFS levels, _scan stops starting new levels and
     returns capped=True with the folders scanned so far — the in-flight level completes,
     but the next one is never dispatched, so it's a clean disclosed partial."""
-    # The scan reads the clock once at start and once per BFS-level pre-check: start=0,
-    # level-1 and level-2 pre-checks see 0 (proceed), the level-3 pre-check sees 1000
-    # (well past the 10s budget → cut). Faking server.time (not time.monotonic) keeps the
-    # client's own retry clock real, so it doesn't consume these ticks.
-    monkeypatch.setattr(server, "time", _clock_stub([0.0, 0.0, 0.0, 1000.0]))
+    # The scan reads the clock once at start and once per BFS-level pre-check. Use a NON-ZERO
+    # base (1000) so elapsed = monotonic() - start, not monotonic() itself: start=1000, the
+    # level-1 and level-2 pre-checks see 1000 (elapsed 0 → proceed), the level-3 pre-check
+    # sees 2000 (elapsed 1000 ≫ the 10s budget → cut). A base of 0 would let a buggy
+    # `monotonic() >= deadline` (missing `- start`) pass this test too. Faking server.time
+    # (not time.monotonic) keeps the client's own retry clock real, so it isn't consumed here.
+    monkeypatch.setattr(server, "time", _clock_stub([1000.0, 1000.0, 1000.0, 2000.0]))
 
     # root -> A,B (depth 1) -> A1,B1 (depth 2). The cut lands before depth 2 is scanned.
     r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
@@ -628,9 +630,12 @@ def test_scan_deadline_explicit_override(override, expected):
     "value,expected",
     [
         (None, server._HTTP_TIMEOUT_DEFAULT),
-        ("15", 15),
+        ("15", 15.0),
+        ("1.5", 1.5),  # fractional honored — the knob exists to LOWER the timeout; must not fall back to 30
         ("0", server._HTTP_TIMEOUT_DEFAULT),  # a literal 0 = httpx 0s (fail-instantly) → treated as unset, use default
         ("-5", server._HTTP_TIMEOUT_DEFAULT),
+        ("nan", server._HTTP_TIMEOUT_DEFAULT),  # non-finite → default
+        ("inf", server._HTTP_TIMEOUT_DEFAULT),  # non-finite → default
         ("nope", server._HTTP_TIMEOUT_DEFAULT),  # unparseable → default
     ],
 )
@@ -640,3 +645,17 @@ def test_http_timeout_env_parsing(monkeypatch, value, expected):
     else:
         monkeypatch.setenv("BOX_HTTP_TIMEOUT", value)
     assert server._http_timeout() == expected
+
+
+def test_http_timeout_wired_into_client(monkeypatch):
+    """BOX_HTTP_TIMEOUT actually reaches the constructed client's httpx timeout (end-to-end).
+
+    Guards the _http_timeout() -> _client() -> httpx.Client(timeout=...) wiring: a refactor
+    that drops or mis-passes the kwarg would otherwise leave every other test green.
+    """
+    monkeypatch.setenv("BOX_HTTP_TIMEOUT", "12.5")
+    server.reset_client()  # force a fresh client that reads the env
+    client = server._client()
+    # httpx expands a scalar timeout to a Timeout with all four phases set to that value.
+    assert client._http.timeout.read == 12.5
+    assert client._http.timeout.connect == 12.5

@@ -420,41 +420,46 @@ def _scan_deadline(override: float | None = None) -> float:
     Resolved from an explicit ``override`` (``_scan``'s ``deadline_seconds`` arg) when
     given, else ``BOX_SCAN_DEADLINE``, else ``_SCAN_DEADLINE_DEFAULT``. A value of 0 or
     negative (from either source) disables the deadline (returns ``inf``), for local use
-    where there is no gateway timeout to beat. An unparseable or non-finite env value
-    (``nan``/``inf`` both parse as floats but are not a meaningful budget) falls back to the
-    default. When the budget is hit the scan stops starting new BFS levels and returns the
-    partial with ``capped=True`` — the same disclosure ``capped`` gives for the folder cap.
+    where there is no gateway timeout to beat. An unparseable or non-finite value
+    (``nan``/``inf`` both parse as floats but are not a meaningful budget — from the env OR a
+    computed override) falls back to the default rather than silently disabling. When the
+    budget is hit the scan stops starting new BFS levels and returns the partial with
+    ``capped=True`` — the same disclosure ``capped`` gives for the folder cap.
     """
     if override is not None:
-        return override if override > 0 else float("inf")
-    raw = os.environ.get("BOX_SCAN_DEADLINE")
-    if not raw:
-        return _SCAN_DEADLINE_DEFAULT
-    try:
-        val = float(raw)
-    except ValueError:
-        return _SCAN_DEADLINE_DEFAULT
-    if not math.isfinite(val):  # e.g. "nan"/"inf" — not a usable budget, don't silently disable
+        val = float(override)
+    else:
+        raw = os.environ.get("BOX_SCAN_DEADLINE")
+        if not raw:
+            return _SCAN_DEADLINE_DEFAULT
+        try:
+            val = float(raw)
+        except ValueError:
+            return _SCAN_DEADLINE_DEFAULT
+    if not math.isfinite(val):  # "nan"/"inf" — not a usable budget; don't silently disable
         return _SCAN_DEADLINE_DEFAULT
     return val if val > 0 else float("inf")
 
 
-def _http_timeout() -> int:
+def _http_timeout() -> float:
     """Per-request httpx timeout in seconds, from ``BOX_HTTP_TIMEOUT`` else the default.
 
-    A non-positive or unparseable value falls back to ``_HTTP_TIMEOUT_DEFAULT``. (httpx
-    would take a literal ``0`` as a 0-second timeout — every request fails instantly — which
-    is never what a ``0`` here means, so it is treated as "unset" and the default is used;
-    ``None`` is httpx's "disabled" value, which this helper never returns.)
+    Parsed as a float so ``1.5`` works (mirroring ``BOX_SCAN_DEADLINE`` — the whole point of
+    the knob is to *lower* the timeout, so a fractional value must not silently fall back to
+    the larger default). A non-positive, non-finite, or unparseable value falls back to
+    ``_HTTP_TIMEOUT_DEFAULT``. (httpx would take a literal ``0`` as a 0-second timeout — every
+    request fails instantly — and ``None`` as "disabled"; this helper returns neither.)
     """
     raw = os.environ.get("BOX_HTTP_TIMEOUT")
     if not raw:
         return _HTTP_TIMEOUT_DEFAULT
     try:
-        val = int(raw)
+        val = float(raw)
     except ValueError:
         return _HTTP_TIMEOUT_DEFAULT
-    return val if val > 0 else _HTTP_TIMEOUT_DEFAULT
+    if not math.isfinite(val) or val <= 0:
+        return _HTTP_TIMEOUT_DEFAULT
+    return val
 
 
 def _scan_concurrency(override: int | None = None) -> int:
@@ -676,11 +681,8 @@ def _scan(
             if seen >= max_folders:
                 capped = True
                 break
-            # Soft wall-clock deadline: checked only between BFS levels, so the batch
-            # already in flight always finishes and the merge/ordering stay intact.
-            # Stopping here (rather than mid-batch) returns a disclosed partial before
-            # the tool call itself times out — `capped` covers this the same as the
-            # folder cap. `start`/`deadline` come from just above the pool.
+            # Soft wall-clock deadline (see _SCAN_DEADLINE_DEFAULT): checked between levels
+            # so the in-flight batch always finishes, then break with capped set.
             if time.monotonic() - start >= deadline:
                 capped = True
                 break

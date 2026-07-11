@@ -41,10 +41,14 @@ def make_router(*, events=None, token="tok-abc", expires_in=3600):
 
 
 @pytest.fixture(autouse=True)
-def _reset_singleton():
-    """Reset the server's cached client around every test for isolation."""
+def _reset_singleton(monkeypatch):
+    """Reset the server's cached client around every test for isolation, and clear the
+    scan-tuning env vars so an ambient BOX_SCAN_DEADLINE / BOX_HTTP_TIMEOUT in the shell
+    can't silently cut scans short (a test that wants one sets it explicitly)."""
     from boxadm_mcp import server
 
+    monkeypatch.delenv("BOX_SCAN_DEADLINE", raising=False)
+    monkeypatch.delenv("BOX_HTTP_TIMEOUT", raising=False)
     server.reset_client()
     yield
     server.reset_client()
