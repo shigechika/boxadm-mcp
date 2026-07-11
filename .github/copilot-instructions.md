@@ -84,12 +84,16 @@ correctness bug, not a style nit.
 
 `_scan()` runs its per-folder collaboration/item lookups concurrently
 (bounded `ThreadPoolExecutor`, `BOX_SCAN_CONCURRENCY`), which makes a
-per-folder API error (403/429/…) more likely at scale. Those errors are
-tolerated but counted in `fetch_errors` and surfaced by every collab/exposure
-tool — the same "no silent partial coverage" contract as `capped`, applied to
-the error axis (coverage is complete only when `capped` is false **and**
-`fetch_errors` is 0). Flag any change that swallows a per-folder failure
-without counting it, or that drops `fetch_errors` from a tool's return value.
+per-folder API error more likely at scale. A 429 (honoring `Retry-After`) or
+transient 5xx is first retried with jittered backoff in `client.py`'s `_get`
+(bounded by an attempt cap and a per-call wall-clock budget), so a passing
+throttle recovers; only a failure that outlasts those retries (e.g. a
+persistent 403, or a sustained throttle) is tolerated but counted in
+`fetch_errors` and surfaced by every collab/exposure tool — the same "no
+silent partial coverage" contract as `capped`, applied to the error axis
+(coverage is complete only when `capped` is false **and** `fetch_errors` is
+0). Flag any change that swallows a per-folder failure without counting it, or
+that drops `fetch_errors` from a tool's return value.
 The concurrency must not change results: the walk stays a level-synchronous
 BFS with an order-preserving merge, so `folders_scanned`, the visited set, and
 output ordering match a sequential walk — a change that reorders or races

@@ -45,11 +45,14 @@ test runs.
   **not** in the cache key (it changes speed, never results), and
   `executor.map`'s order-preserving merge keeps the visited set,
   `folders_scanned`, and output ordering identical to a sequential walk.
-  Per-folder API failures (403/429/…) are tolerated but counted in
-  `fetch_errors` and surfaced by every collab/exposure tool, so a folder
-  dropped by an error is disclosed the same way `capped` discloses a budget
-  cut — coverage is complete only when `capped` is false AND `fetch_errors`
-  is 0.
+  Per-folder API failures are tolerated but counted in `fetch_errors` and
+  surfaced by every collab/exposure tool, so a folder dropped by an error is
+  disclosed the same way `capped` discloses a budget cut — coverage is
+  complete only when `capped` is false AND `fetch_errors` is 0. A 429
+  (honoring `Retry-After`) or transient 5xx is retried with jittered backoff
+  in `client.py`'s `_get` first (bounded by an attempt cap and a per-call
+  wall-clock budget), so only a failure that outlasts those retries (e.g. a
+  persistent 403, or a sustained throttle) lands in `fetch_errors`.
 - `boxadm_mcp/client.py` — two read-only client classes sharing
   `_FolderReadMixin`: `BoxClient` (Client Credentials Grant, server-to-server)
   and `BoxOAuthClient` (OAuth 2.0 user auth with an auto-refreshed,

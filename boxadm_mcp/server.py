@@ -452,12 +452,14 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
     merged (and subfolders enqueued) in input order, so the visited set,
     ``folders_scanned`` and output ordering are identical to a sequential BFS.
 
-    Per-folder API errors (e.g. 403 on a folder the co-admin can list but not read
-    collaborations for, or a transient 429) are tolerated and skipped, but counted
-    — once per folder, so ``fetch_errors`` never exceeds ``folders_scanned`` — and
-    surfaced by the tools, so a folder whose lookup failed is disclosed rather than
-    silently under-reported (the same contract ``capped`` gives for the budget/
-    window caps).
+    Per-folder API errors are tolerated and skipped, but counted — once per folder,
+    so ``fetch_errors`` never exceeds ``folders_scanned`` — and surfaced by the tools,
+    so a folder whose lookup failed is disclosed rather than silently under-reported
+    (the same contract ``capped`` gives for the budget/window caps). The client retries
+    a 429 (honoring ``Retry-After``) or a transient 5xx with jittered backoff first, so
+    a *passing* throttle recovers; only an error that outlasts those retries (e.g. a
+    persistent 403 the co-admin can list but not read collaborations for, or a sustained
+    throttle) lands in ``fetch_errors``.
     """
     from collections import deque
     from concurrent.futures import ThreadPoolExecutor
@@ -648,8 +650,9 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
     Coverage note: limited to content the co-admin user can access (not provably
     100% of the enterprise) and to the depth/folders caps. Returns
     ``folders_scanned``, ``capped``, ``fetch_errors`` (count of folders whose
-    lookup hit an API error, e.g. 403/429 — coverage is complete only when
-    ``capped`` is false AND ``fetch_errors`` is 0), ``count``,
+    lookup hit an API error that outlasted the client's retries, e.g. a persistent
+    403 or a sustained throttle — coverage is complete only when ``capped`` is false
+    AND ``fetch_errors`` is 0), ``count``,
     ``external_collaborators`` (folder, owner, collaborator, role, status,
     expires_at), and ``skipped_externally_owned`` (folder_id, folder_name,
     owner). On failure returns ``{"error": ...}``.

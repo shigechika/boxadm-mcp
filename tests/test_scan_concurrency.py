@@ -157,9 +157,9 @@ def test_fetch_errors_capped_at_one_per_folder():
         if path == "/2.0/folders/0/items":
             return httpx.Response(200, json=_root_items(["A"]))
         if path == "/2.0/folders/A/collaborations":
-            return httpx.Response(500, json={"message": "err"})  # fails
+            return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         if path == "/2.0/folders/A/items":
-            return httpx.Response(503, json={"message": "err"})  # also fails
+            return httpx.Response(403, json={"message": "forbidden"})  # also fails (403, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -183,7 +183,7 @@ def test_public_shared_links_surfaces_fetch_errors():
         if path == "/2.0/folders/0/items":
             return httpx.Response(200, json=_root_items(["A"]))
         if path == "/2.0/folders/A/items":
-            return httpx.Response(500, json={"message": "err"})  # A's listing fails
+            return httpx.Response(403, json={"message": "forbidden"})  # A's listing fails (403, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -193,6 +193,42 @@ def test_public_shared_links_surfaces_fetch_errors():
 
     assert out["fetch_errors"] == 1
     assert out["folders_scanned"] == 2  # root + A
+
+
+def test_scan_recovers_from_transient_429(monkeypatch):
+    """A folder whose collaborations call returns a transient 429 then 200 recovers end-to-end.
+
+    The client's retry keeps the folder OUT of fetch_errors and still surfaces its external
+    collaborator — the headline behavior of issue #11 / PR #12, proven through _scan (not just
+    at the unit _get level). Backoff sleep is stubbed so the test stays instant.
+    """
+    import boxadm_mcp.client as client_mod
+
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)  # skip real backoff
+    calls = Counter()
+
+    def handler(request):
+        path = request.url.path
+        if path == "/oauth2/token":
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        if path == "/2.0/folders/0/items":
+            return httpx.Response(200, json=_root_items(["A"]))
+        if path == "/2.0/folders/A/collaborations":
+            calls["A_collab"] += 1
+            if calls["A_collab"] == 1:
+                return httpx.Response(429, json={"message": "rate limited"})  # transient throttle
+            return httpx.Response(200, json=_collab_body("A"))  # recovers on retry
+        return httpx.Response(200, json={"entries": []})
+
+    r = respx.mock(assert_all_called=False)
+    r.route(host="api.box.com").mock(side_effect=handler)
+    with r:
+        client, err = server._connect()
+        scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
+
+    assert calls["A_collab"] == 2  # 429, then a successful retry
+    assert scan["fetch_errors"] == 0  # the transient throttle recovered, not counted
+    assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-A@gmail.com"]
 
 
 # --------------------------------------------------------------------------
@@ -393,7 +429,7 @@ def test_scan_counts_and_surfaces_fetch_errors():
         if path == "/2.0/folders/FOK/collaborations":
             return httpx.Response(200, json=EXT_COLLAB)
         if path == "/2.0/folders/FERR/collaborations":
-            return httpx.Response(500, json={"message": "server error"})  # transient failure
+            return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -416,7 +452,7 @@ def test_item_page_failure_counts_as_fetch_error():
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(503, json={"message": "unavailable"})
+            return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
