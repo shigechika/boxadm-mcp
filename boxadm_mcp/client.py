@@ -36,8 +36,23 @@ TOKEN_REFRESH_SKEW = 60
 # is safe to retry — matching Box's own SDKs (429/5xx, exponential backoff + jitter) and
 # gwsadm-mcp's _execute. See issue #11. Without this a transient throttle during the
 # parallel _scan() would drop a folder into fetch_errors instead of recovering.
-_MAX_RETRIES = 5
-_MAX_BACKOFF = 8.0  # seconds; cap on any single backoff (and on an over-large Retry-After)
+#
+# These GETs run inside a bounded tool-call timeout (claude.ai's gateway is ~60s), so the
+# retries are also capped by a total wall-clock budget (_MAX_RETRY_ELAPSED), not just a
+# count: a brief blip recovers, but a *sustained* throttle / hung endpoint fails fast into
+# fetch_errors (a disclosed partial) instead of blocking until the whole tool call times out
+# and returns nothing. _get fails fast rather than sleeping whenever the next delay — a
+# Retry-After the server asked for, or a backoff — would exceed the remaining budget, so an
+# over-large Retry-After is never under-waited into a hammering loop.
+#
+# This budget bounds the *retry/backoff* of one _get, not a single request's wall time (that
+# is httpx's DEFAULT_TIMEOUT) nor the aggregate across a whole _scan (many _gets over many
+# BFS levels can still, under a sustained enterprise-wide throttle, sum past the tool timeout
+# — a _scan-level deadline would be the deeper fix, tracked separately).
+_MAX_ATTEMPTS = 5  # total GET attempts per call (so up to _MAX_ATTEMPTS - 1 retries)
+_MAX_BACKOFF = 8.0  # seconds; ceiling on a single exponential-backoff sleep
+_MAX_RETRY_ELAPSED = 10.0  # seconds; total wall-clock budget for one _get's retries + backoff
+_RETRY_AFTER_JITTER = 1.0  # seconds; small spread added to a server Retry-After to de-sync concurrent callers
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
@@ -54,13 +69,20 @@ def _retry_after_seconds(resp: httpx.Response) -> float | None:
 
 
 def _backoff_delay(attempt: int, resp: httpx.Response | None = None) -> float:
-    """Server-provided ``Retry-After`` (capped) when available, else full-jitter exponential backoff."""
+    """Delay before the next retry.
+
+    A server ``Retry-After`` (seconds) is honored as-is plus a small jitter (so concurrently
+    throttled callers, which all receive the same value, do not retry in lockstep); otherwise
+    full-jitter exponential backoff — ``random.uniform(0, min(2**attempt, _MAX_BACKOFF))``, so
+    a single backoff sleep never exceeds ``_MAX_BACKOFF``. The caller fails fast instead of
+    sleeping when the returned delay would exceed its remaining retry-time budget, so an
+    over-large ``Retry-After`` is neither under-waited nor slept through — it fails fast.
+    """
     if resp is not None:
         after = _retry_after_seconds(resp)
         if after is not None:
-            return min(after, _MAX_BACKOFF)
-    base = min(2.0**attempt, _MAX_BACKOFF)
-    return base + random.uniform(0, base)
+            return after + random.uniform(0, _RETRY_AFTER_JITTER)
+    return random.uniform(0, min(2.0**attempt, _MAX_BACKOFF))
 
 
 class BoxError(Exception):
@@ -227,17 +249,20 @@ class _FolderReadMixin:
         """Authenticated GET with a 401 re-auth retry and 429 / transient-error backoff.
 
         On 401 the subclass's ``_on_401()`` refreshes the token once and the request is
-        retried immediately — this re-auth is *free*: it does not consume the backoff budget
+        retried immediately — this re-auth is *free*: it does not consume the retry budget
         (``attempt`` is only advanced by a 429 / 5xx / connection retry), so a 401 that lands
         on the last rate-limit attempt still gets its retry. On 429 / 5xx / a connection error
-        the request is retried up to ``_MAX_RETRIES`` times, honoring ``Retry-After`` when
-        present else full-jitter exponential backoff. A permission 403 / 404 (and a second
-        401) fails fast. When retries are exhausted the last failure is raised as ``BoxError``
-        (so callers still see it — e.g. _scan surfaces it in ``fetch_errors`` — rather than a
-        transient throttle being masked).
+        the request is retried up to ``_MAX_ATTEMPTS`` attempts, honoring ``Retry-After`` when
+        present else full-jitter exponential backoff — but a retry is skipped (fail fast) once
+        the next delay would push past the per-call ``_MAX_RETRY_ELAPSED`` wall-clock budget,
+        so a sustained throttle / hung endpoint surfaces quickly instead of blocking the whole
+        tool call. A permission 403 / 404 (and a second 401) fails fast. When retries stop the
+        last failure is raised as ``BoxError`` (so callers still see it — e.g. _scan surfaces
+        it in ``fetch_errors`` — rather than a transient throttle being masked).
         """
         reauthed = False
         attempt = 0
+        deadline = time.monotonic() + _MAX_RETRY_ELAPSED
         while True:
             token = self._ensure_token()
             try:
@@ -252,22 +277,34 @@ class _FolderReadMixin:
                 status = e.response.status_code
                 if status == 401 and not reauthed:
                     # Token rejected before its deadline: refresh once, retry immediately.
-                    # Not counted against the rate-limit backoff budget (attempt unchanged).
+                    # Not counted against the rate-limit retry budget (attempt unchanged).
                     self._on_401()
                     reauthed = True
                     continue
-                if status in _RETRYABLE_STATUS and attempt + 1 < _MAX_RETRIES:
-                    time.sleep(_backoff_delay(attempt, e.response))
+                if status in _RETRYABLE_STATUS and self._retry_ok(attempt, deadline, _backoff_delay(attempt, e.response)):
                     attempt += 1
                     continue
                 raise BoxError(f"HTTP {status}: GET {path}") from e
             except httpx.HTTPError as e:
                 # Connection / timeout error: transient, and the GET is idempotent.
-                if attempt + 1 < _MAX_RETRIES:
-                    time.sleep(_backoff_delay(attempt))
+                if self._retry_ok(attempt, deadline, _backoff_delay(attempt)):
                     attempt += 1
                     continue
                 raise BoxError(f"connection error: GET {path}: {e}") from e
+
+    @staticmethod
+    def _retry_ok(attempt: int, deadline: float, delay: float) -> bool:
+        """Sleep ``delay`` and return True if another attempt is allowed, else return False.
+
+        A retry is allowed only while under both the attempt cap (``_MAX_ATTEMPTS``) and the
+        wall-clock budget (``delay`` must fit before ``deadline``); the caller fails fast on
+        False. Sleeping here (not in the caller) keeps the "check budget then wait" step atomic
+        so an over-large Retry-After is never slept before the budget is consulted.
+        """
+        if attempt + 1 >= _MAX_ATTEMPTS or time.monotonic() + delay > deadline:
+            return False
+        time.sleep(delay)
+        return True
 
     def get_folder(self, folder_id: str, *, fields: list[str] | None = None) -> dict:
         return self._get(f"/folders/{folder_id}", {"fields": ",".join(fields)} if fields else None)

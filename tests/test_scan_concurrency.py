@@ -195,6 +195,42 @@ def test_public_shared_links_surfaces_fetch_errors():
     assert out["folders_scanned"] == 2  # root + A
 
 
+def test_scan_recovers_from_transient_429(monkeypatch):
+    """A folder whose collaborations call returns a transient 429 then 200 recovers end-to-end.
+
+    The client's retry keeps the folder OUT of fetch_errors and still surfaces its external
+    collaborator — the headline behavior of issue #11 / PR #12, proven through _scan (not just
+    at the unit _get level). Backoff sleep is stubbed so the test stays instant.
+    """
+    import boxadm_mcp.client as client_mod
+
+    monkeypatch.setattr(client_mod.time, "sleep", lambda s: None)  # skip real backoff
+    calls = Counter()
+
+    def handler(request):
+        path = request.url.path
+        if path == "/oauth2/token":
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        if path == "/2.0/folders/0/items":
+            return httpx.Response(200, json=_root_items(["A"]))
+        if path == "/2.0/folders/A/collaborations":
+            calls["A_collab"] += 1
+            if calls["A_collab"] == 1:
+                return httpx.Response(429, json={"message": "rate limited"})  # transient throttle
+            return httpx.Response(200, json=_collab_body("A"))  # recovers on retry
+        return httpx.Response(200, json={"entries": []})
+
+    r = respx.mock(assert_all_called=False)
+    r.route(host="api.box.com").mock(side_effect=handler)
+    with r:
+        client, err = server._connect()
+        scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
+
+    assert calls["A_collab"] == 2  # 429, then a successful retry
+    assert scan["fetch_errors"] == 0  # the transient throttle recovered, not counted
+    assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-A@gmail.com"]
+
+
 # --------------------------------------------------------------------------
 # Concurrent token handling: N workers each hit a 401, refresh, and retry without
 # a spurious 'Bearer None' / fetch_error (the CCG check-then-return snapshot).
