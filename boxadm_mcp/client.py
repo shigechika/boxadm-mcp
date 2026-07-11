@@ -227,15 +227,18 @@ class _FolderReadMixin:
         """Authenticated GET with a 401 re-auth retry and 429 / transient-error backoff.
 
         On 401 the subclass's ``_on_401()`` refreshes the token once and the request is
-        retried immediately. On 429 / 5xx / a connection error the request is retried up to
-        ``_MAX_RETRIES`` times, honoring ``Retry-After`` when present else full-jitter
-        exponential backoff. A permission 403 / 404 fails fast. When retries are exhausted
-        the last failure is raised as ``BoxError`` (so callers still see it — e.g. _scan
-        surfaces it in ``fetch_errors`` — rather than a transient throttle being masked).
+        retried immediately — this re-auth is *free*: it does not consume the backoff budget
+        (``attempt`` is only advanced by a 429 / 5xx / connection retry), so a 401 that lands
+        on the last rate-limit attempt still gets its retry. On 429 / 5xx / a connection error
+        the request is retried up to ``_MAX_RETRIES`` times, honoring ``Retry-After`` when
+        present else full-jitter exponential backoff. A permission 403 / 404 (and a second
+        401) fails fast. When retries are exhausted the last failure is raised as ``BoxError``
+        (so callers still see it — e.g. _scan surfaces it in ``fetch_errors`` — rather than a
+        transient throttle being masked).
         """
         reauthed = False
-        last: Exception | None = None
-        for attempt in range(_MAX_RETRIES):
+        attempt = 0
+        while True:
             token = self._ensure_token()
             try:
                 resp = self._http.get(
@@ -249,24 +252,22 @@ class _FolderReadMixin:
                 status = e.response.status_code
                 if status == 401 and not reauthed:
                     # Token rejected before its deadline: refresh once, retry immediately.
-                    # Not counted against the rate-limit backoff budget.
+                    # Not counted against the rate-limit backoff budget (attempt unchanged).
                     self._on_401()
                     reauthed = True
-                    last = e
                     continue
                 if status in _RETRYABLE_STATUS and attempt + 1 < _MAX_RETRIES:
                     time.sleep(_backoff_delay(attempt, e.response))
-                    last = e
+                    attempt += 1
                     continue
                 raise BoxError(f"HTTP {status}: GET {path}") from e
             except httpx.HTTPError as e:
                 # Connection / timeout error: transient, and the GET is idempotent.
                 if attempt + 1 < _MAX_RETRIES:
                     time.sleep(_backoff_delay(attempt))
-                    last = e
+                    attempt += 1
                     continue
                 raise BoxError(f"connection error: GET {path}: {e}") from e
-        raise BoxError(f"retries exhausted: GET {path}") from last
 
     def get_folder(self, folder_id: str, *, fields: list[str] | None = None) -> dict:
         return self._get(f"/folders/{folder_id}", {"fields": ",".join(fields)} if fields else None)

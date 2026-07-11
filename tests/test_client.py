@@ -179,3 +179,28 @@ def test_get_403_fails_fast_without_retry(monkeypatch):
     assert raised
     assert route.call_count == 1  # a permission 403 is not retried
     assert slept == []
+
+
+def test_get_401_reauth_does_not_consume_retry_budget(monkeypatch):
+    """A 401 re-auth is free: it must not eat into the 429 backoff budget (Copilot review on #12).
+
+    Under the old for-range(_MAX_RETRIES) loop the leading 401 consumed one iteration, so the
+    fourth 429 exhausted the budget and this raised. The 401 retry is now free, so all five
+    rate-limit attempts remain and the final 200 succeeds.
+    """
+    slept = _stub_sleep(monkeypatch)
+    with respx.mock(assert_all_called=False) as r:
+        _token_ok(r)  # initial token + the _on_401 refresh both succeed
+        route = r.get(EVENTS_URL).mock(
+            side_effect=[
+                httpx.Response(401, json={}),  # triggers a free re-auth, no backoff, no budget spent
+                httpx.Response(429, json={}),
+                httpx.Response(429, json={}),
+                httpx.Response(429, json={}),
+                httpx.Response(429, json={}),
+                httpx.Response(200, json={"entries": []}),  # 6th request, still within budget
+            ]
+        )
+        _client().get_admin_events(limit=1)
+    assert route.call_count == 6  # 401 + four 429 + the success — the 401 cost no 429 slot
+    assert len(slept) == 4  # only the four 429s backed off
