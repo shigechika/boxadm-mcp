@@ -14,6 +14,8 @@ which would be flaky under CI load.
 """
 
 import threading
+import time as _time
+import types
 from collections import Counter
 
 import httpx
@@ -21,6 +23,24 @@ import pytest
 import respx
 
 from boxadm_mcp import server
+
+
+def _clock_stub(ticks):
+    """A stand-in for the ``time`` module whose ``monotonic()`` yields ``ticks`` (holding
+    the last value after they run out) and delegates ``time``/``sleep`` to the real module.
+
+    Patch it onto ``server``'s namespace (``setattr(server, "time", ...)``) rather than onto
+    ``time.monotonic`` directly: the latter mutates the shared module and would also drive the
+    client's own retry clock (same ``time`` object), consuming ticks unpredictably.
+    """
+    seq = iter(ticks)
+    last = {"v": ticks[-1]}
+
+    def monotonic():
+        last["v"] = next(seq, last["v"])
+        return last["v"]
+
+    return types.SimpleNamespace(monotonic=monotonic, time=_time.time, sleep=_time.sleep)
 
 
 def _call(tool):
@@ -535,3 +555,84 @@ def test_scan_default_concurrency_still_correct():
     assert out["fetch_errors"] == 0
     assert set(counts) == {"F0", "F1", "F2"}  # each folder queried exactly once
     assert all(v == 1 for v in counts.values())
+
+
+# --------------------------------------------------------------------------
+# Scan-level wall-clock deadline (issue #13): a scan that runs past its budget
+# stops between BFS levels and returns a disclosed partial (capped=True).
+# --------------------------------------------------------------------------
+def test_scan_deadline_cuts_scan_short(monkeypatch):
+    """When the deadline is hit between BFS levels, _scan stops starting new levels and
+    returns capped=True with the folders scanned so far — the in-flight level completes,
+    but the next one is never dispatched, so it's a clean disclosed partial."""
+    # The scan reads the clock once at start and once per BFS-level pre-check: start=0,
+    # level-1 and level-2 pre-checks see 0 (proceed), the level-3 pre-check sees 1000
+    # (well past the 10s budget → cut). Faking server.time (not time.monotonic) keeps the
+    # client's own retry clock real, so it doesn't consume these ticks.
+    monkeypatch.setattr(server, "time", _clock_stub([0.0, 0.0, 0.0, 1000.0]))
+
+    # root -> A,B (depth 1) -> A1,B1 (depth 2). The cut lands before depth 2 is scanned.
+    r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
+    with r:
+        client, err = server._connect()
+        assert err is None
+        scan = server._scan(client, "0", max_folders=100, max_depth=3, want_collabs=True, deadline_seconds=10, concurrency=4)
+
+    assert scan["capped"] is True
+    assert scan["folders_scanned"] == 3  # root + A + B; A1/B1 cut by the deadline
+    assert sorted(collab_ids) == ["A", "B"]  # depth-2 folders never had collaborations fetched
+    assert {c["folder_id"] for c in scan["external_collaborations"]} == {"A", "B"}
+
+
+def test_scan_deadline_disabled_completes_full_walk():
+    """deadline_seconds<=0 disables the deadline (inf), so the walk runs to completion."""
+    r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
+    with r:
+        client, err = server._connect()
+        scan = server._scan(client, "0", max_folders=100, max_depth=3, want_collabs=True, deadline_seconds=0, concurrency=4)
+    assert scan["capped"] is False
+    assert scan["folders_scanned"] == 5  # root + A + B + A1 + B1
+    assert sorted(collab_ids) == ["A", "A1", "B", "B1"]
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, server._SCAN_DEADLINE_DEFAULT),
+        ("30", 30.0),
+        ("12.5", 12.5),
+        ("0", float("inf")),  # disabled
+        ("-1", float("inf")),  # disabled
+        ("nope", server._SCAN_DEADLINE_DEFAULT),  # unparseable → default
+    ],
+)
+def test_scan_deadline_env_parsing(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("BOX_SCAN_DEADLINE", raising=False)
+    else:
+        monkeypatch.setenv("BOX_SCAN_DEADLINE", value)
+    assert server._scan_deadline() == expected
+
+
+@pytest.mark.parametrize("override,expected", [(45.0, 45.0), (5, 5.0), (0, float("inf")), (-2, float("inf"))])
+def test_scan_deadline_explicit_override(override, expected):
+    """An explicit deadline_seconds wins over the env; 0/negative disables (inf)."""
+    assert server._scan_deadline(override) == expected
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, server._HTTP_TIMEOUT_DEFAULT),
+        ("15", 15),
+        ("0", server._HTTP_TIMEOUT_DEFAULT),  # a literal 0 = httpx 0s (fail-instantly) → treated as unset, use default
+        ("-5", server._HTTP_TIMEOUT_DEFAULT),
+        ("nope", server._HTTP_TIMEOUT_DEFAULT),  # unparseable → default
+    ],
+)
+def test_http_timeout_env_parsing(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("BOX_HTTP_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("BOX_HTTP_TIMEOUT", value)
+    assert server._http_timeout() == expected

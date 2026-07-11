@@ -9,6 +9,7 @@ Read-only. Tools:
 """
 
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 from mcp.server.fastmcp import FastMCP
@@ -37,12 +38,14 @@ def _client() -> BoxClient | BoxOAuthClient:
     global _CLIENT
     if _CLIENT is None:
         api_base = os.environ.get("BOX_API_BASE", DEFAULT_API_BASE)
+        timeout = _http_timeout()
         if _auth_mode() == "oauth":
             _CLIENT = BoxOAuthClient(
                 os.environ["BOX_CLIENT_ID"],
                 os.environ["BOX_CLIENT_SECRET"],
                 token_cache=os.environ.get("BOX_TOKEN_CACHE") or None,
                 api_base=api_base,
+                timeout=timeout,
             )
         else:
             _CLIENT = BoxClient(
@@ -50,6 +53,7 @@ def _client() -> BoxClient | BoxOAuthClient:
                 os.environ["BOX_CLIENT_SECRET"],
                 os.environ["BOX_ENTERPRISE_ID"],
                 api_base=api_base,
+                timeout=timeout,
             )
     return _CLIENT
 
@@ -382,9 +386,71 @@ _SCAN_CONCURRENCY_DEFAULT = 8
 _SCAN_CONCURRENCY_MIN = 1
 _SCAN_CONCURRENCY_MAX = 32
 
+# Soft wall-clock budget (seconds) for one _scan(). The per-folder retry budget in
+# client.py bounds a single _get, but not the aggregate of a whole scan: under a
+# sustained throttle many _gets over many BFS levels can sum past claude.ai's ~60s
+# gateway timeout, which would kill the tool call and return nothing — losing the
+# capped/fetch_errors "disclosed partial" contract. This deadline stops starting new
+# BFS levels once elapsed >= budget and returns the partial with capped=True instead.
+#
+# The check sits between levels, so the *already-dispatched* batch always finishes:
+# a scan is bounded to roughly deadline + one batch's duration. The default (45s) keeps
+# the common case — an aggregate of many normal-latency calls — under a ~60s gateway.
+# It does NOT by itself guarantee a hard sub-gateway bound when the final batch hits a
+# *hung* endpoint (that batch can run a full _HTTP_TIMEOUT_DEFAULT, so ~45+30 > 60): a
+# deployment that needs the hard bound lowers BOX_HTTP_TIMEOUT (and/or BOX_SCAN_DEADLINE)
+# so deadline + one batch stays under its gateway.
+_SCAN_DEADLINE_DEFAULT = 45.0
+
+# Per-request httpx timeout (seconds). Kept at the historical default (a single Box
+# folder listing can legitimately be slow, so lowering it globally risks false cut-offs);
+# exposed via BOX_HTTP_TIMEOUT so a latency-sensitive deployment can lower it to keep a
+# hung endpoint from stretching the final in-flight scan batch past its gateway timeout.
+_HTTP_TIMEOUT_DEFAULT = 30
+
 
 def _clamp_concurrency(n: int) -> int:
     return max(_SCAN_CONCURRENCY_MIN, min(_SCAN_CONCURRENCY_MAX, n))
+
+
+def _scan_deadline(override: float | None = None) -> float:
+    """Soft wall-clock budget in seconds for one ``_scan()``.
+
+    Resolved from an explicit ``override`` (``_scan``'s ``deadline_seconds`` arg) when
+    given, else ``BOX_SCAN_DEADLINE``, else ``_SCAN_DEADLINE_DEFAULT``. A value of 0 or
+    negative (from either source) disables the deadline (returns ``inf``), for local use
+    where there is no gateway timeout to beat. An unparseable env value falls back to the
+    default. When the budget is hit the scan stops starting new BFS levels and returns the
+    partial with ``capped=True`` — the same disclosure ``capped`` gives for the folder cap.
+    """
+    if override is not None:
+        return override if override > 0 else float("inf")
+    raw = os.environ.get("BOX_SCAN_DEADLINE")
+    if not raw:
+        return _SCAN_DEADLINE_DEFAULT
+    try:
+        val = float(raw)
+    except ValueError:
+        return _SCAN_DEADLINE_DEFAULT
+    return val if val > 0 else float("inf")
+
+
+def _http_timeout() -> int:
+    """Per-request httpx timeout in seconds, from ``BOX_HTTP_TIMEOUT`` else the default.
+
+    A non-positive or unparseable value falls back to ``_HTTP_TIMEOUT_DEFAULT``. (httpx
+    would take a literal ``0`` as a 0-second timeout — every request fails instantly — which
+    is never what a ``0`` here means, so it is treated as "unset" and the default is used;
+    ``None`` is httpx's "disabled" value, which this helper never returns.)
+    """
+    raw = os.environ.get("BOX_HTTP_TIMEOUT")
+    if not raw:
+        return _HTTP_TIMEOUT_DEFAULT
+    try:
+        val = int(raw)
+    except ValueError:
+        return _HTTP_TIMEOUT_DEFAULT
+    return val if val > 0 else _HTTP_TIMEOUT_DEFAULT
 
 
 def _scan_concurrency(override: int | None = None) -> int:
@@ -417,8 +483,6 @@ def _scan_concurrency(override: int | None = None) -> int:
 
 
 def _cached_scan(client, root_folder_id: str, max_folders: int, max_depth: int, want_collabs: bool) -> dict:
-    import time
-
     # Concurrency is deliberately NOT part of the key: it changes how fast the
     # traversal runs, never what it returns, so two callers with different pool
     # sizes still share one memoized result correctly.
@@ -431,16 +495,31 @@ def _cached_scan(client, root_folder_id: str, max_folders: int, max_depth: int, 
     return result
 
 
-def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want_collabs: bool = True, concurrency: int | None = None) -> dict:
+def _scan(
+    client,
+    root_folder_id: str,
+    max_folders: int,
+    max_depth: int,
+    *,
+    want_collabs: bool = True,
+    concurrency: int | None = None,
+    deadline_seconds: float | None = None,
+) -> dict:
     """BFS over folders the authenticating (co-admin) user can see, collecting
     public shared links and (when ``want_collabs``) external collaborations in one
     pass.
 
-    Bounded by ``max_folders`` / ``max_depth``; sets ``capped`` when the folder
-    cap is hit (so coverage is never silently partial). A ``visited`` set avoids
-    re-fetching a folder reached twice. ``want_collabs=False`` skips the
-    per-folder collaborations call entirely (e.g. for public_shared_links, which
-    doesn't need it) — a real API-call saving at scale.
+    Bounded by ``max_folders`` / ``max_depth`` and by a soft wall-clock deadline
+    (``deadline_seconds``, else ``BOX_SCAN_DEADLINE``, else the default); sets
+    ``capped`` when the folder cap is hit OR the deadline is reached before the
+    walk finishes (so coverage is never silently partial). The deadline is checked
+    only between BFS levels — the current concurrent batch always completes — so a
+    scan is bounded to roughly the deadline plus one batch's duration, and a
+    sustained throttle returns a disclosed partial instead of a gateway timeout
+    with no result. A ``visited`` set avoids re-fetching a folder reached twice.
+    ``want_collabs=False`` skips the per-folder collaborations call entirely (e.g.
+    for public_shared_links, which doesn't need it) — a real API-call saving at
+    scale.
 
     Each folder's per-folder work (its ``get_folder_collaborations`` call plus its
     ``get_folder_items`` paging) is independent, so a whole BFS frontier is
@@ -469,6 +548,8 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
     # is bounded to 1..32 exactly like BOX_SCAN_CONCURRENCY — a 0/negative value
     # would otherwise make ThreadPoolExecutor raise.
     workers = _scan_concurrency(concurrency)
+    deadline = _scan_deadline(deadline_seconds)
+    start = time.monotonic()
 
     def _visit(entry: tuple) -> dict:
         """Fetch one folder's external collabs + public links + subfolders.
@@ -589,6 +670,14 @@ def _scan(client, root_folder_id: str, max_folders: int, max_depth: int, *, want
     with ThreadPoolExecutor(max_workers=workers) as pool:
         while queue:
             if seen >= max_folders:
+                capped = True
+                break
+            # Soft wall-clock deadline: checked only between BFS levels, so the batch
+            # already in flight always finishes and the merge/ordering stay intact.
+            # Stopping here (rather than mid-batch) returns a disclosed partial before
+            # the tool call itself times out — `capped` covers this the same as the
+            # folder cap. `start`/`deadline` come from just above the pool.
+            if time.monotonic() - start >= deadline:
                 capped = True
                 break
             # Drain the current frontier into a batch, deduping via `visited` and

@@ -52,7 +52,13 @@ test runs.
   (honoring `Retry-After`) or transient 5xx is retried with jittered backoff
   in `client.py`'s `_get` first (bounded by an attempt cap and a per-call
   wall-clock budget), so only a failure that outlasts those retries (e.g. a
-  persistent 403, or a sustained throttle) lands in `fetch_errors`.
+  persistent 403, or a sustained throttle) lands in `fetch_errors`. That
+  per-`_get` budget does not bound a whole scan, so `_scan()` also carries a
+  soft wall-clock deadline (`BOX_SCAN_DEADLINE`, default 45s; `0` disables),
+  checked only between BFS levels (the in-flight batch always finishes) — when
+  hit it sets `capped` and returns the disclosed partial rather than letting
+  the tool call run to a gateway timeout that returns nothing. The per-request
+  HTTP timeout is `BOX_HTTP_TIMEOUT` (default 30s). Neither is in the cache key.
 - `boxadm_mcp/client.py` — two read-only client classes sharing
   `_FolderReadMixin`: `BoxClient` (Client Credentials Grant, server-to-server)
   and `BoxOAuthClient` (OAuth 2.0 user auth with an auto-refreshed,

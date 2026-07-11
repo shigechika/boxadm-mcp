@@ -93,6 +93,8 @@ pip install -e .
 | `BOX_TOKEN_CACHE` | | oauth の token cache パス。既定 `~/.config/boxadm-mcp/token.json` |
 | `BOX_API_BASE` | | 既定 `https://api.box.com` |
 | `BOX_SCAN_CONCURRENCY` | | 列挙スキャンのフォルダ単位並列数。既定 `8`、範囲 `1`–`32` にクランプ |
+| `BOX_SCAN_DEADLINE` | | 列挙スキャン1回のソフトな実時間バジェット（秒）。既定 `45`、`0`／負値で無効化。到達するとツール呼び出しがタイムアウトするまで走り続けず、部分結果（`capped=true`）を開示して返す |
+| `BOX_HTTP_TIMEOUT` | | リクエスト単位の HTTP タイムアウト（秒）。既定 `30`。`BOX_SCAN_DEADLINE` と併せて下げると、1本の低速エンドポイントが実行中の最終バッチをゲートウェイのタイムアウト超過まで引き延ばすのを防げる |
 | `BOX_ALLOWED_DOMAINS` | ✓ | 内部メールドメイン（カンマ区切り）。既定値なし — 設定するまで全アドレスが外部扱いになる |
 
 secret は `.mcp.json` に直書きせず（例: 起動前に読み込むローカル env
