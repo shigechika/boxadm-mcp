@@ -74,11 +74,13 @@ a tool handler manually construct `{"content": [...], "isError": ...}`.
 
 ## 4. `capped` must be set whenever a scan or window is cut short
 
-`_scan()` sets `capped=True` when `max_folders` is hit;
-`external_access_events`/`daily_brief`'s event fetch reports `capped` when
-`max_events` is hit. Every tool that surfaces enumeration or event-window
-results propagates this flag so partial coverage is never presented as "no
-findings". A new probe or tool that adds a page/count cap without wiring a
+`_scan()` sets `capped=True` when `max_folders` is hit **or** its soft
+wall-clock deadline (`BOX_SCAN_DEADLINE`, default 45s, checked between BFS
+levels) is exceeded; `external_access_events`/`daily_brief`'s event fetch
+reports `capped` when `max_events` is hit. Every tool that surfaces
+enumeration or event-window results propagates this flag so partial coverage
+is never presented as "no findings". A new probe or tool that adds a
+page/count cap without wiring a
 `capped` (or equivalent) flag through to the tool's return value is a
 correctness bug, not a style nit.
 
@@ -86,7 +88,8 @@ correctness bug, not a style nit.
 (bounded `ThreadPoolExecutor`, `BOX_SCAN_CONCURRENCY`), which makes a
 per-folder API error more likely at scale. A 429 (honoring `Retry-After`) or
 transient 5xx is first retried with jittered backoff in `client.py`'s `_get`
-(bounded by an attempt cap and a per-call wall-clock budget), so a passing
+(bounded by an attempt cap and a per-call wall-clock budget; the per-request
+httpx timeout is `BOX_HTTP_TIMEOUT`, default 30s), so a passing
 throttle recovers; only a failure that outlasts those retries (e.g. a
 persistent 403, or a sustained throttle) is tolerated but counted in
 `fetch_errors` and surfaced by every collab/exposure tool — the same "no
@@ -98,6 +101,11 @@ The concurrency must not change results: the walk stays a level-synchronous
 BFS with an order-preserving merge, so `folders_scanned`, the visited set, and
 output ordering match a sequential walk — a change that reorders or races
 those is a regression even if the counts happen to match.
+Under CCG auth, `BoxClient._ensure_token()` deliberately snapshots both
+`self._token` and its deadline into locals *before* the validity check: a
+concurrent `_on_401()` on another scan worker can null `self._token` between
+the check and the return, so a "simplified" re-read of the field after the
+guard would send a `Bearer None` request. Don't flatten that snapshot.
 
 ## 5. `BOX_ALLOWED_DOMAINS` has no built-in default — verify new code doesn't reintroduce one
 
