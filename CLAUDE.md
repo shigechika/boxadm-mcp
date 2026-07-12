@@ -59,6 +59,13 @@ test runs.
   hit it sets `capped` and returns the disclosed partial rather than letting
   the tool call run to a gateway timeout that returns nothing. The per-request
   HTTP timeout is `BOX_HTTP_TIMEOUT` (default 30s). Neither is in the cache key.
+  When `want_collabs=True`, folders Box flags with `is_externally_owned` are
+  skipped (an outside party owns them, so their collaborations aren't the
+  enterprise's to audit) and reported separately under
+  `skipped_externally_owned`, never silently dropped — this is Box's
+  authoritative signal, and an earlier owner-domain heuristic
+  (`is_external(owner)`) was tried and reverted as a production regression (it
+  collapsed ~190 audited folders to 9).
 - `boxadm_mcp/client.py` — two read-only client classes sharing
   `_FolderReadMixin`: `BoxClient` (Client Credentials Grant, server-to-server)
   and `BoxOAuthClient` (OAuth 2.0 user auth with an auto-refreshed,
