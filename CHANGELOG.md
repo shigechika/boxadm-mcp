@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/shigechika/boxadm-mcp/compare/v0.4.0...v0.5.0) (2026-07-26)
+
+
+### Features
+
+* live smoke test that exercises every registered tool ([#25](https://github.com/shigechika/boxadm-mcp/issues/25)) ([3230f80](https://github.com/shigechika/boxadm-mcp/commit/3230f80bc613b605547323c5bbdf3cb816b066a8))
+
 ## [0.4.0](https://github.com/shigechika/boxadm-mcp/compare/v0.3.7...v0.4.0) (2026-07-11)
 
 
