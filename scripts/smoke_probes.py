@@ -45,6 +45,16 @@ SCAN_BOUNDS: dict[str, Any] = {"root_folder_id": ROOT_FOLDER, "max_folders": 25,
 #: accounting without requiring the enterprise to be misconfigured.
 SCAN_KEYS = ("folders_scanned", "capped", "fetch_errors")
 
+#: A scan swallows a per-folder API failure into ``fetch_errors`` rather than
+#: raising, so a revoked scope produces an answer whose envelope is complete
+#: and whose contents are empty. Requiring the counter to be *present* misses
+#: that entirely; requiring it to be zero is what separates "nothing to report"
+#: from "could not look".
+#:
+#: ``capped`` is deliberately not forbidden: these probes cap the walk on
+#: purpose, so it is true on every healthy run.
+NO_FETCH_ERRORS = (r'"fetch_errors": [1-9]',)
+
 
 PROBES: dict[str, Probe] = {
     # -- server / backend health ------------------------------------------
@@ -78,18 +88,21 @@ PROBES: dict[str, Probe] = {
         require_keys=(*SCAN_KEYS, "count", "external_collaborators"),
         rows_key="external_collaborators",
         allow_empty=True,
+        must_not_match=NO_FETCH_ERRORS,
     ),
     "public_shared_links": Probe(
         args=SCAN_BOUNDS,
         require_keys=(*SCAN_KEYS, "count", "public_shared_links"),
         rows_key="public_shared_links",
         allow_empty=True,
+        must_not_match=NO_FETCH_ERRORS,
     ),
     "top_external_sharers": Probe(
         args={**SCAN_BOUNDS, "top": 5},
         require_keys=(*SCAN_KEYS, "top_external_sharers"),
         rows_key="top_external_sharers",
         allow_empty=True,
+        must_not_match=NO_FETCH_ERRORS,
     ),
     # -- morning patrol ------------------------------------------------------
     # The brief runs the access analytics and the exposure scan back to back,
@@ -110,6 +123,9 @@ PROBES: dict[str, Probe] = {
             "exposure.capped",
             "exposure.fetch_errors",
         ),
+        # Present is not enough: the brief reuses the same scan, so a revoked
+        # scope gives it a full-looking envelope over an empty audit.
+        must_not_match=NO_FETCH_ERRORS,
         allow_empty=True,
         timeout=600,
     ),
