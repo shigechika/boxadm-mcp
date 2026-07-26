@@ -197,6 +197,43 @@ python3 -m venv .venv
 Tests never touch Box — `respx` mocks the CCG/OAuth token endpoint and the
 `admin_logs`/enumeration APIs.
 
+### Live smoke test
+
+That isolation is the point of the unit tests, and also their limit: they
+cannot tell you that a tool has stopped returning real data.
+`scripts/smoke_test.py` runs **every registered tool** against the configured
+enterprise and fails on empty, malformed or error answers:
+
+```bash
+# needs the same BOX_* environment variables as the server
+uv run python scripts/smoke_test.py
+uv run python scripts/smoke_test.py --only shared_links --traceback
+```
+
+- **Read-only.** Every tool here reads; nothing in Box is changed. A future
+  tool that writes must be listed as state-changing and skipped, and a test
+  enforces that.
+- **No payloads in the report.** Tool names, statuses and row counts only;
+  server-authored error text is redacted too, since Box errors quote the
+  account or item they were asked about.
+- **Bounded.** These tools page the event stream and walk the folder tree, so
+  each probe passes explicit small caps instead of the interactive defaults
+  (5000 events, 150 folders) — enforced by a test that finds the bounding
+  parameters from the source.
+- **Nothing enterprise-specific in the specs.** A test bans address shapes
+  (login, URL, hostname, IPv4, IPv6) and the parameters that carry an account
+  name, because this repository is public. The only literal identifier is
+  folder id `0`, which is the root folder in every enterprise.
+- An empty answer passes: no public links and no external collaborators is the
+  desired state, so probes assert the accounting envelope (`count`,
+  `folders_scanned`, `window_hours`) rather than a row count.
+- CI enforces the cheap half: a tool registered without a probe spec fails the
+  build (`tests/test_smoke_probes.py`), so adding a tool forces the question
+  "how would we know it works?".
+- `scripts/smoke_harness.py` is the engine and holds no Box knowledge: it is
+  kept identical across the servers that share it, so fix engine bugs once and
+  sync the file rather than patching this copy.
+
 ## Releasing
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please).
