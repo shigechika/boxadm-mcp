@@ -62,28 +62,33 @@ PROBES: dict[str, Probe] = {
     "recent_admin_events": Probe(
         args={"since_hours": 24, "limit": 25},
         require_keys=("count", "events"),
+        rows_key="events",
         allow_empty=True,
     ),
     # -- access analytics ---------------------------------------------------
     "external_access_events": Probe(
         args={"since_hours": 24, "max_events": 500, "top": 5},
         require_keys=("window_hours", "events_scanned", "capped", "external_access_count"),
+        rows_key="top_external_accessors",
         allow_empty=True,
     ),
     # -- exposure scans ------------------------------------------------------
     "external_collaborators": Probe(
         args=SCAN_BOUNDS,
         require_keys=(*SCAN_KEYS, "count", "external_collaborators"),
+        rows_key="external_collaborators",
         allow_empty=True,
     ),
     "public_shared_links": Probe(
         args=SCAN_BOUNDS,
         require_keys=(*SCAN_KEYS, "count", "public_shared_links"),
+        rows_key="public_shared_links",
         allow_empty=True,
     ),
     "top_external_sharers": Probe(
         args={**SCAN_BOUNDS, "top": 5},
         require_keys=(*SCAN_KEYS, "top_external_sharers"),
+        rows_key="top_external_sharers",
         allow_empty=True,
     ),
     # -- morning patrol ------------------------------------------------------
@@ -92,7 +97,19 @@ PROBES: dict[str, Probe] = {
     # lose a section — hence asserting both halves by name.
     "daily_brief": Probe(
         args={"since_hours": 24, "max_events": 500, "max_folders": 25, "max_depth": 1, "top": 5},
-        require_keys=("window_hours", "access", "exposure", "exposure.folders_scanned"),
+        require_keys=(
+            "window_hours",
+            "access",
+            "exposure",
+            "exposure.folders_scanned",
+            # The partial-coverage fields are this server's central contract:
+            # a capped scan or a fetch error that reads as a complete audit is
+            # exactly what they exist to prevent, so a brief that drops them
+            # must not pass.
+            "access.capped",
+            "exposure.capped",
+            "exposure.fetch_errors",
+        ),
         allow_empty=True,
         timeout=600,
     ),
