@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/shigechika/boxadm-mcp/compare/v0.5.0...v0.5.1) (2026-07-26)
+
+
+### Bug Fixes
+
+* separate "nothing to report" from "could not look" ([#27](https://github.com/shigechika/boxadm-mcp/issues/27)) ([04a9df6](https://github.com/shigechika/boxadm-mcp/commit/04a9df6a1890f29843f4feeb9f756c03600c9ade))
+
 ## [0.5.0](https://github.com/shigechika/boxadm-mcp/compare/v0.4.0...v0.5.0) (2026-07-26)
 
 
