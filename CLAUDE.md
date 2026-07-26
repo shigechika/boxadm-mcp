@@ -121,3 +121,14 @@ a rotation).
   `@mcp.tool()`-decorated function directly, so the suite keeps working
   regardless of whether the installed `mcp` version's tool decorator
   returns the plain function or a wrapper exposing it via `.fn`.
+- `scripts/` holds the live smoke test: `smoke_test.py` (CLI), its per-tool
+  specs in `smoke_probes.py`, and `smoke_harness.py` — the server-agnostic
+  engine, kept identical across the servers that share it, so fix engine bugs
+  once and sync the file rather than patching this copy (it is excluded from
+  `ruff format` for that reason, and keeps the shared copies' own style;
+  `ruff check` still applies to it). It runs every registered tool against a
+  real enterprise (see README); `tests/test_smoke_probes.py` is the offline
+  half and needs only the tool registry. Adding a tool without a probe spec
+  fails CI: decide when you add the tool how anyone would know it works.
+  Probes stay read-only, name no enterprise-specific value, and pass an
+  explicit small value for every bounding parameter a tool offers.

@@ -181,6 +181,15 @@ collaborations count as an external-sharing finding.
 - Any test touching `cache_lock`/`_refresh`/`_force_refresh` needs to
   exercise the concurrent/re-check behavior described in focus item #1, not
   just a single-process refresh.
+- `tests/test_smoke_probes.py` guards `scripts/smoke_test.py`, which
+  exercises every registered tool against a real enterprise. It asserts
+  what can be checked without one: every registered tool has a probe
+  spec, no spec targets a removed tool, state-changing tools stay
+  skipped, every bounding parameter a tool offers is passed explicitly,
+  and no enterprise-specific literal (login, address, host) is written
+  into the specs — this repository is public. A new tool therefore needs
+  an entry in `scripts/smoke_probes.py` or CI fails; that is deliberate,
+  not an obstacle to route around.
 
 # Out of scope for review comments
 
