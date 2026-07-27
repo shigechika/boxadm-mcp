@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.2](https://github.com/shigechika/boxadm-mcp/compare/v0.5.1...v0.5.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* **ci:** read AI-review guidance from the base revision, drop the checkout ([#33](https://github.com/shigechika/boxadm-mcp/issues/33)) ([e3ff584](https://github.com/shigechika/boxadm-mcp/commit/e3ff584187aeb3cba90106885528f4824823e25e))
+* report the auth mode in effect, not the configured string ([#32](https://github.com/shigechika/boxadm-mcp/issues/32)) ([33f3e0f](https://github.com/shigechika/boxadm-mcp/commit/33f3e0f0e34784447e8359942d30dafaea4fa85d))
+* sync the smoke-test engine ([#30](https://github.com/shigechika/boxadm-mcp/issues/30)) ([993cf89](https://github.com/shigechika/boxadm-mcp/commit/993cf899161de4ab6998e8611b2cb38c1f4f792f))
+
 ## [0.5.1](https://github.com/shigechika/boxadm-mcp/compare/v0.5.0...v0.5.1) (2026-07-26)
 
 
