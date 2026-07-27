@@ -26,8 +26,24 @@ ACCESS_EVENT_TYPES = ["DOWNLOAD", "PREVIEW"]
 DEFAULT_API_BASE = "https://api.box.com"
 
 
+AUTH_MODE_CCG = "ccg"
+AUTH_MODE_OAUTH = "oauth"
+
+
 def _auth_mode() -> str:
-    return os.environ.get("BOX_AUTH_MODE", "ccg").lower()
+    """Return the mode the server is actually running in, not the raw setting.
+
+    ``_client()`` treats everything that is not ``oauth`` as CCG, so echoing the
+    configured string let ``health_check`` report a mode the server was not in:
+    ``BOX_AUTH_MODE=oauth2`` came back as ``oauth2`` while CCG was in use, and
+    the reported value was outside the two the tool's description promises.
+
+    An unrecognised value therefore reads as ``ccg`` — the same fallback
+    ``_client()`` already applies, now visible in the report rather than hidden
+    behind whatever was typed. An empty value is treated as unset.
+    """
+    configured = os.environ.get("BOX_AUTH_MODE", "").strip().lower()
+    return AUTH_MODE_OAUTH if configured == AUTH_MODE_OAUTH else AUTH_MODE_CCG
 
 
 # Cached client: a stdio server is long-lived and single-user, so we build and
@@ -40,7 +56,9 @@ def _client() -> BoxClient | BoxOAuthClient:
     if _CLIENT is None:
         api_base = os.environ.get("BOX_API_BASE", DEFAULT_API_BASE)
         timeout = _http_timeout()
-        if _auth_mode() == "oauth":
+        # Same constant as _auth_mode(): the branch taken here and the mode
+        # health_check reports must not be able to disagree.
+        if _auth_mode() == AUTH_MODE_OAUTH:
             _CLIENT = BoxOAuthClient(
                 os.environ["BOX_CLIENT_ID"],
                 os.environ["BOX_CLIENT_SECRET"],
@@ -91,7 +109,9 @@ def health_check() -> dict:
     one token request plus a single-row events probe — it does not scan history.
 
     Always returns the same keys: ``status`` (healthy / degraded / error),
-    ``service``, ``version``, ``auth_mode`` (ccg / oauth), ``box_api_base``,
+    ``service``, ``version``, ``auth_mode`` (ccg / oauth — the mode in effect,
+    so an unrecognised ``BOX_AUTH_MODE`` reads as ``ccg``, which is what the
+    server falls back to), ``box_api_base``,
     ``enterprise_id``, ``auth`` (ok / error / missing-env / needs-login),
     ``events_accessible`` (bool), and ``allowed_domains``. On a degraded or error
     result, ``detail`` carries the reason.
