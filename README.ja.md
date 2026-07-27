@@ -85,7 +85,7 @@ pip install -e .
 
 | 変数 | 必須 | 説明 |
 |---|---|---|
-| `BOX_AUTH_MODE` | | `oauth` / `ccg`（既定 `ccg`） |
+| `BOX_AUTH_MODE` | | `oauth` / `ccg`（既定 `ccg`）。それ以外の値は `ccg` にフォールバックする。`health_check` は実際に動作しているモードを返すので、打ち間違いは入力値ではなく `ccg` として現れる |
 | `BOX_CLIENT_ID` | ✓ | アプリの Client ID |
 | `BOX_CLIENT_SECRET` | ✓ | アプリの Client Secret |
 | `BOX_ENTERPRISE_ID` | ccg 時 | Enterprise ID（CCG の subject。oauth では不要） |

@@ -87,7 +87,7 @@ pip install -e .
 
 | Variable | Required | Description |
 |---|---|---|
-| `BOX_AUTH_MODE` | | `oauth` / `ccg` (default `ccg`) |
+| `BOX_AUTH_MODE` | | `oauth` / `ccg` (default `ccg`). Any other value falls back to `ccg`; `health_check` reports the mode in effect, so a typo shows up there as `ccg` rather than as what was typed |
 | `BOX_CLIENT_ID` | ✓ | App Client ID |
 | `BOX_CLIENT_SECRET` | ✓ | App Client Secret |
 | `BOX_ENTERPRISE_ID` | ccg mode | Enterprise ID (CCG subject; not needed for oauth) |

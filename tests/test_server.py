@@ -4,6 +4,7 @@ import json
 import time
 
 import httpx
+import pytest
 import respx
 
 from boxadm_mcp import server
@@ -69,6 +70,71 @@ def test_health_check_oauth_mode_healthy(monkeypatch, tmp_path):
     assert out["status"] == "healthy"
     assert out["auth"] == "ok"
     assert out["events_accessible"] is True
+
+
+@pytest.mark.parametrize(
+    "configured, expected",
+    [
+        (None, "ccg"),  # unset
+        ("", "ccg"),  # set but empty — same as unset
+        ("  ", "ccg"),
+        ("ccg", "ccg"),
+        ("oauth", "oauth"),
+        ("OAuth", "oauth"),  # case-folded
+        (" oauth ", "oauth"),
+        ("oauth2", "ccg"),  # unrecognised: _client() builds a CCG client
+        ("oath", "ccg"),  # a plausible typo
+    ],
+)
+def test_auth_mode_reports_the_mode_in_effect(monkeypatch, configured, expected):
+    """The reported mode must be the one _client() actually builds.
+
+    The raw value used to be echoed back, so a typo read as if it had taken
+    effect: BOX_AUTH_MODE=oauth2 was reported as "oauth2" by health_check while
+    the server ran CCG, and the value was outside the two the tool's own
+    description promises.
+    """
+    if configured is None:
+        monkeypatch.delenv("BOX_AUTH_MODE", raising=False)
+    else:
+        monkeypatch.setenv("BOX_AUTH_MODE", configured)
+    assert server._auth_mode() == expected
+
+
+def test_unrecognised_auth_mode_builds_a_ccg_client(monkeypatch):
+    """The reported mode and the client actually built agree — the whole bug."""
+    monkeypatch.setenv("BOX_AUTH_MODE", "oauth2")
+    monkeypatch.setenv("BOX_CLIENT_ID", "id")
+    monkeypatch.setenv("BOX_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("BOX_ENTERPRISE_ID", "ent")
+    server.reset_client()
+    try:
+        client = server._client()
+        assert type(client).__name__ == "BoxClient"  # CCG, not BoxOAuthClient
+        assert server._auth_mode() == "ccg"
+    finally:
+        server.reset_client()
+
+
+def test_padded_oauth_builds_an_oauth_client(monkeypatch, tmp_path):
+    """The one input whose client changes: a padded value now means what it says.
+
+    ``" oauth"`` — a space after ``=`` in an env file — failed the unstripped
+    comparison and silently built a CCG client. Pinned because it is the only
+    behaviour change in this fix, not because it is an edge case worth
+    supporting for its own sake.
+    """
+    monkeypatch.setenv("BOX_AUTH_MODE", " oauth ")
+    monkeypatch.setenv("BOX_CLIENT_ID", "id")
+    monkeypatch.setenv("BOX_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("BOX_TOKEN_CACHE", str(tmp_path / "token.json"))
+    server.reset_client()
+    try:
+        client = server._client()
+        assert type(client).__name__ == "BoxOAuthClient"
+        assert server._auth_mode() == "oauth"
+    finally:
+        server.reset_client()
 
 
 def test_health_check_oauth_needs_login(monkeypatch, tmp_path):
