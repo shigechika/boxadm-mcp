@@ -116,6 +116,27 @@ def test_unrecognised_auth_mode_builds_a_ccg_client(monkeypatch):
         server.reset_client()
 
 
+def test_padded_oauth_builds_an_oauth_client(monkeypatch, tmp_path):
+    """The one input whose client changes: a padded value now means what it says.
+
+    ``" oauth"`` — a space after ``=`` in an env file — failed the unstripped
+    comparison and silently built a CCG client. Pinned because it is the only
+    behaviour change in this fix, not because it is an edge case worth
+    supporting for its own sake.
+    """
+    monkeypatch.setenv("BOX_AUTH_MODE", " oauth ")
+    monkeypatch.setenv("BOX_CLIENT_ID", "id")
+    monkeypatch.setenv("BOX_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("BOX_TOKEN_CACHE", str(tmp_path / "token.json"))
+    server.reset_client()
+    try:
+        client = server._client()
+        assert type(client).__name__ == "BoxOAuthClient"
+        assert server._auth_mode() == "oauth"
+    finally:
+        server.reset_client()
+
+
 def test_health_check_oauth_needs_login(monkeypatch, tmp_path):
     """OAuth mode with no token cache reports needs-login (degraded), not a crash."""
     monkeypatch.setenv("BOX_AUTH_MODE", "oauth")
