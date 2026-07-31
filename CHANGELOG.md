@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/shigechika/boxadm-mcp/compare/v0.5.2...v0.5.3) (2026-07-31)
+
+
+### Bug Fixes
+
+* **deps:** cap the MCP SDK below v2 ([#35](https://github.com/shigechika/boxadm-mcp/issues/35)) ([912c473](https://github.com/shigechika/boxadm-mcp/commit/912c473a51ad60933646fc41071539638ed7c8af))
+
 ## [0.5.2](https://github.com/shigechika/boxadm-mcp/compare/v0.5.1...v0.5.2) (2026-07-27)
 
 
