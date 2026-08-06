@@ -1,5 +1,3 @@
-<!-- mcp-name: io.github.shigechika/boxadm-mcp -->
-
 # boxadm-mcp
 
 [English](README.md) | 日本語
