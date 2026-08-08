@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/shigechika/boxadm-mcp/compare/v0.5.3...v0.6.0) (2026-08-08)
+
+
+### Features
+
+* add pr-gate.yml admission control caller ([#41](https://github.com/shigechika/boxadm-mcp/issues/41)) ([a657f96](https://github.com/shigechika/boxadm-mcp/commit/a657f96c8d5100cd4125b6fe36ed2fa40c37af86))
+
 ## [0.5.3](https://github.com/shigechika/boxadm-mcp/compare/v0.5.2...v0.5.3) (2026-07-31)
 
 
