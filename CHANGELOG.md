@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/shigechika/boxadm-mcp/compare/v0.6.0...v0.6.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* add explicit workflow permissions to ci.yml and release.yml ([#43](https://github.com/shigechika/boxadm-mcp/issues/43)) ([5b7659d](https://github.com/shigechika/boxadm-mcp/commit/5b7659dac983686b7f961c37c5ad4fcee13c23a5))
+
 ## [0.6.0](https://github.com/shigechika/boxadm-mcp/compare/v0.5.3...v0.6.0) (2026-08-08)
 
 
