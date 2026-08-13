@@ -74,12 +74,16 @@ reviewer also receives.
 
 ## Never report
 
-- Anything CI already fails on, restated as a review comment: `ruff
-  check .` and `ruff format --check .` both gate this repository, and
-  `tests/test_smoke_probes.py` already fails the build for a registered
-  tool with no probe spec. This does **not** extend to that file's
-  enterprise-specific-literal assertion, which stays blocking above —
-  a leak into a public repository is worth catching twice.
+- A finding that does nothing but restate one of the two gates CI
+  already enforces: `ruff check .` and `ruff format --check .` both gate
+  this repository, and
+  `tests/test_smoke_probes.py` already fails the build for a
+  registered tool with no probe spec. This covers those two and
+  nothing further. It never applies to a rule listed under **Always
+  blocking** above, even when the same diff happens to fail a test as
+  well, and it does not cover that same file's enterprise-specific-literal
+  assertion — a leak reaching a public repository is worth
+  catching twice.
 - A long line that fits within `line-length = 150`. The wider limit in
   `pyproject.toml` is deliberate.
 - Suggestions to hand-build an MCP content envelope
