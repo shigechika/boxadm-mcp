@@ -160,12 +160,15 @@ collaborations count as an external-sharing finding.
   `created_by_logins` parsing (split on `,`, strip, drop empties) is the
   existing pattern for a delimited free-text input; a new similar parameter
   should handle empty/malformed input the same defensive way rather than
-  passing it straight into an API call. `get_user` is the sharper case: it
-  strips its `login` and refuses an empty one **before** the request,
-  because Box reads an empty `filter_term` as "no filter" and answers with a
-  page of the user directory — a blank argument would turn a lookup into an
-  enumeration. Flag a new parameter reaching an API call when its empty form
-  means something wider than what was asked for.
+  `get_user` is the sharper case: it refuses any `login` that is not
+  email-shaped **before** the request, because `filter_term` is a prefix
+  search with no minimum length -- an empty term means "no filter", and a
+  one-character term is just as wide, so both turn a lookup into a page of
+  the user directory. Rejecting only the empty form is NOT enough, and the
+  same reasoning applies on the way out: `get_user` identifies a prefix hit
+  only when it shares the requested local part, and merely counts the rest.
+  Flag a new parameter reaching an API call when a *narrow-looking* value of
+  it still means something wider than what was asked for.
 - A new `@mcp.tool()`'s name and docstring are what the calling model uses
   to decide whether/how to invoke it — flag a vague name or a docstring
   that omits a parameter format an LLM would otherwise have to guess (e.g.
