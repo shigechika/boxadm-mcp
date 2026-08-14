@@ -13,8 +13,9 @@ being forgotten.
 
 import httpx
 import pytest
+import respx
 
-from boxadm_mcp.client import BoxError, BoxRequestError, _validate_resource_id
+from boxadm_mcp.client import _ID_RE, BoxError, BoxRequestError, _validate_resource_id
 
 #: The rewrite itself, independent of this repo: what httpx builds from a
 #: traversal id. Asserted so the tests below stay honest if httpx ever changes
@@ -49,8 +50,8 @@ def test_httpx_really_rewrites_the_endpoint():
         "abc",
         "",
         "   ",
-        "1\n2",  # interior newline: an anchored `^...$` match accepts it, fullmatch does not
-        "1" * 21,  # httpx raises InvalidURL, which is NOT an httpx.HTTPError
+        "1\n2",  # interior newline
+        "1" * 21,  # past the sanity ceiling; no real Box id is this long
     ],
 )
 def test_refuses_anything_that_is_not_a_plain_decimal_id(bad):
@@ -76,14 +77,19 @@ def test_surrounding_whitespace_is_stripped_not_refused(padded):
 
 
 def test_anchored_match_would_have_been_weaker():
-    """Why `fullmatch`, demonstrated rather than asserted in a comment."""
+    """Why `fullmatch`, demonstrated rather than asserted in a comment.
+
+    The two forms differ on a TRAILING newline, not an interior one: `$` matches
+    just before a final `\n`. Stripping happens to cover that input here, so this
+    is about not depending on the strip, and the demonstration says exactly that
+    rather than implying a difference the regexes do not have.
+    """
     import re
 
     anchored = re.compile(r"^[0-9]{1,20}$")
-    assert anchored.match("1\n2\n") is None  # agrees here
-    assert anchored.match("12\n") is not None  # `$` matches before a trailing newline
-    with pytest.raises(BoxRequestError):
-        _validate_resource_id("1\n2", kind="folder")
+    assert anchored.match("12\n") is not None  # accepted by the anchored form...
+    assert _ID_RE.fullmatch("12\n") is None  # ...refused by fullmatch
+    assert anchored.match("1\n2") is None  # interior: BOTH refuse, no difference here
 
 
 def test_refusal_is_a_boxerror_so_the_scan_tools_keep_their_contract():
@@ -95,3 +101,50 @@ def test_refusal_is_a_boxerror_so_the_scan_tools_keep_their_contract():
     losing both the partial-coverage disclosure and the structured error shape.
     """
     assert issubclass(BoxRequestError, BoxError)
+
+
+# ---------------------------------------------------------------------------
+# Driving the helpers directly cannot show that the real call paths reach them.
+# These go through the client and assert the PROPERTY -- nothing was sent -- rather
+# than which layer stopped it. That is deliberate: the id check and the assembled-
+# path check are two layers for the same property, and a test that pinned one of
+# them would fail on a refactor that is still correct. Removing BOTH is what these
+# catch.
+# ---------------------------------------------------------------------------
+
+
+def _client_with_no_api_route():
+    """A client whose token endpoint works and whose API calls would 500.
+
+    Any request that escapes the guard therefore FAILS the test loudly instead of
+    quietly matching a catch-all mock.
+    """
+    import boxadm_mcp.client as c
+
+    r = respx.mock(assert_all_called=False)
+    r.post("https://api.box.com/oauth2/token").mock(return_value=httpx.Response(200, json={"access_token": "t", "expires_in": 3600}))
+    api = r.route(host="api.box.com").mock(return_value=httpx.Response(500))
+    return r, api, c.BoxClient("i", "s", "e")
+
+
+@pytest.mark.parametrize("method", ["get_folder", "get_folder_items", "get_folder_collaborations"])
+def test_every_folder_getter_refuses_before_issuing_a_request(method):
+    r, api, client = _client_with_no_api_route()
+    with r:
+        with pytest.raises(BoxRequestError):
+            getattr(client, method)(TRAVERSAL)
+        assert api.call_count == 0  # asserted inside: respx rolls the log back on exit
+
+
+def test_get_rechecks_the_assembled_path_even_without_a_validated_id():
+    """The backstop, for a future getter that interpolates an id itself.
+
+    ``_get`` is where the path becomes a URL, so it is the one place that covers
+    every present and future endpoint.
+    """
+    r, api, client = _client_with_no_api_route()
+    with r:
+        for path in ("/folders/../users", "/users?filter_term=a", "folders/1", "/a/./b"):
+            with pytest.raises(BoxRequestError):
+                client._get(path)
+        assert api.call_count == 0

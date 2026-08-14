@@ -82,7 +82,7 @@ def test_public_shared_links_lists_open_and_skips_collab_calls():
     with r:
         out = _call(server.public_shared_links)(max_depth=1)
     ids = {p["item_id"] for p in out["public_shared_links"]}
-    assert ids == {"201", "501"}  # F2 has no link
+    assert ids == {"201", "501"}  # 202 has no link
     assert counts["collab"] == 0  # optimization: no collaboration calls when not needed
     assert out["fetch_errors"] == 0  # clean run surfaces the disclosure field
 
@@ -187,13 +187,13 @@ def test_external_collaborators_skips_externally_owned_folders():
     # The flag-absent folder IS walked (cautious toward auditing).
     assert "/2.0/folders/403/collaborations" in collab_paths
 
-    # Only the internal folder's external collaborator surfaces; nothing from FEXT.
+    # Only the internal folder's external collaborator surfaces; nothing from the externally-owned folder 401.
     by = {c["collaborator"] for c in out["external_collaborators"]}
     assert by == {"ext@gmail.com", "pending@partner.example"}
     assert all(c["folder_id"] == "201" for c in out["external_collaborators"])
 
     # Skipped folder does not consume the folders_scanned budget.
-    assert out["folders_scanned"] == 4  # root + F1 + FSVC + FUNK (FEXT excluded)
+    assert out["folders_scanned"] == 4  # root + 201 + 402 + 403 (401 excluded)
 
 
 def test_externally_owned_skip_is_independent_of_allowlist(monkeypatch):
@@ -206,7 +206,7 @@ def test_externally_owned_skip_is_independent_of_allowlist(monkeypatch):
         out = _call(server.external_collaborators)(max_depth=1)
 
     assert {s["folder_id"] for s in out["skipped_externally_owned"]} == {"401"}
-    assert out["folders_scanned"] == 4  # FEXT excluded regardless of allowlist
+    assert out["folders_scanned"] == 4  # 401 (externally owned) excluded regardless of allowlist
     assert "/2.0/folders/401/collaborations" not in collab_paths
     assert "/2.0/folders/402/collaborations" in collab_paths  # in-enterprise: walked
 

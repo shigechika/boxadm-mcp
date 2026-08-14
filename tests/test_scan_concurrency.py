@@ -115,9 +115,9 @@ def _tree_router(items_map):
 # Multi-level (max_depth>=2) walk: the core of the parallelization
 # --------------------------------------------------------------------------
 def test_scan_max_depth_2_bfs_order_and_count():
-    """root->[A,B], A->[A1,A2], B->[B1,B2] at max_depth=2. All levels are walked,
+    """root->[101,102], 101->[111,112], 102->[121,122] at max_depth=2. All levels are walked,
     non-root folders' items ARE listed (concurrently), and collaborations come back
-    in cross-parent BFS order (all of A's children before B's) — pinning the
+    in cross-parent BFS order (all of 101's children before 102's) — pinning the
     level-synchronous drain + order-preserving merge a sequential walk would give."""
     tree = {"0": ["101", "102"], "101": ["111", "112"], "102": ["121", "122"]}
     r, collab_ids, item_ids = _tree_router(tree)
@@ -126,13 +126,13 @@ def test_scan_max_depth_2_bfs_order_and_count():
         assert err is None
         scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
 
-    assert scan["folders_scanned"] == 7  # root + A,B + A1,A2,B1,B2
+    assert scan["folders_scanned"] == 7  # root + 101,102 + their four children
     assert scan["capped"] is False
     assert scan["fetch_errors"] == 0
-    # Non-root folders A and B were item-listed (depth 1 < 2), proving multi-level
+    # Non-root folders 101 and 102 were item-listed (depth 1 < 2), proving multi-level
     # concurrent item fetches actually happen — not just the root.
     assert set(item_ids) == {"0", "101", "102"}
-    # Cross-parent BFS order: level 1 (A,B) before level 2, and A's children before B's.
+    # Cross-parent BFS order: level 1 (101,102) before level 2, and 101's children before 102's.
     assert [c["folder_id"] for c in scan["external_collaborations"]] == ["101", "102", "111", "112", "121", "122"]
 
 
@@ -143,7 +143,7 @@ def test_scan_max_depth_2_capped_prefix():
     r, collab_ids, _ = _tree_router(tree)
     with r:
         client, err = server._connect()
-        # budget 4 → root(1) + A,B(2) + A1(1) = 4; A2,B1,B2 unreached.
+        # budget 4 -> root(1) + 101,102(2) + 111(1) = 4; the rest unreached.
         scan = server._scan(client, "0", max_folders=4, max_depth=2, want_collabs=True, concurrency=4)
 
     assert scan["folders_scanned"] == 4
@@ -153,7 +153,7 @@ def test_scan_max_depth_2_capped_prefix():
 
 
 def test_scan_deduplicates_folder_reachable_from_two_parents():
-    """A subfolder id listed under two parents (root->[A,B], A->[C], B->[C]) is
+    """A subfolder id listed under two parents (root->[101,102], 101->[103], 102->[103]) is
     visited once: its collaborations are fetched once, it appears once, and it
     consumes the budget once (folders_scanned counts 4, not 5)."""
     tree = {"0": ["101", "102"], "101": ["103"], "102": ["103"]}
@@ -162,7 +162,7 @@ def test_scan_deduplicates_folder_reachable_from_two_parents():
         client, err = server._connect()
         scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
 
-    assert scan["folders_scanned"] == 4  # root + A + B + C (C not double-counted)
+    assert scan["folders_scanned"] == 4  # root + 101 + 102 + 103 (103 not double-counted)
     assert collab_ids.count("103") == 1  # dup fetched only once
     c_rows = [c for c in scan["external_collaborations"] if c["folder_id"] == "103"]
     assert len(c_rows) == 1  # dup surfaces only once
@@ -191,7 +191,7 @@ def test_fetch_errors_capped_at_one_per_folder():
         scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
 
     assert scan["fetch_errors"] == 1  # folder A failed both calls → counted once, not twice
-    assert scan["folders_scanned"] == 2  # root + A (A's failed items yields no children)
+    assert scan["folders_scanned"] == 2  # root + 101 (101's failed items yields no children)
 
 
 def test_public_shared_links_surfaces_fetch_errors():
@@ -214,7 +214,7 @@ def test_public_shared_links_surfaces_fetch_errors():
         out = _call(server.public_shared_links)(max_folders=100, max_depth=2)
 
     assert out["fetch_errors"] == 1
-    assert out["folders_scanned"] == 2  # root + A
+    assert out["folders_scanned"] == 2  # root + 101
 
 
 def test_scan_recovers_from_transient_429(monkeypatch):
@@ -236,8 +236,8 @@ def test_scan_recovers_from_transient_429(monkeypatch):
         if path == "/2.0/folders/0/items":
             return httpx.Response(200, json=_root_items(["101"]))
         if path == "/2.0/folders/101/collaborations":
-            calls["119"] += 1
-            if calls["119"] == 1:
+            calls["101_collab"] += 1
+            if calls["101_collab"] == 1:
                 return httpx.Response(429, json={"message": "rate limited"})  # transient throttle
             return httpx.Response(200, json=_collab_body("101"))  # recovers on retry
         return httpx.Response(200, json={"entries": []})
@@ -248,7 +248,7 @@ def test_scan_recovers_from_transient_429(monkeypatch):
         client, err = server._connect()
         scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
 
-    assert calls["119"] == 2  # 429, then a successful retry
+    assert calls["101_collab"] == 2  # 429, then a successful retry
     assert scan["fetch_errors"] == 0  # the transient throttle recovered, not counted
     assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-101@gmail.com"]
 
@@ -575,7 +575,7 @@ def test_scan_deadline_cuts_scan_short(monkeypatch):
     # (not time.monotonic) keeps the client's own retry clock real, so it isn't consumed here.
     monkeypatch.setattr(server, "time", _clock_stub([1000.0, 1000.0, 1000.0, 2000.0]))
 
-    # root -> A,B (depth 1) -> A1,B1 (depth 2). The cut lands before depth 2 is scanned.
+    # root -> 101,102 (depth 1) -> 111,121 (depth 2). The cut lands before depth 2 is scanned.
     r, collab_ids, _ = _tree_router({"0": ["101", "102"], "101": ["111"], "102": ["121"]})
     with r:
         client, err = server._connect()
@@ -583,7 +583,7 @@ def test_scan_deadline_cuts_scan_short(monkeypatch):
         scan = server._scan(client, "0", max_folders=100, max_depth=3, want_collabs=True, deadline_seconds=10, concurrency=4)
 
     assert scan["capped"] is True
-    assert scan["folders_scanned"] == 3  # root + A + B; A1/B1 cut by the deadline
+    assert scan["folders_scanned"] == 3  # root + 101 + 102; their children cut by the deadline
     assert sorted(collab_ids) == ["101", "102"]  # depth-2 folders never had collaborations fetched
     assert {c["folder_id"] for c in scan["external_collaborations"]} == {"101", "102"}
 

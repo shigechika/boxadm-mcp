@@ -74,11 +74,27 @@ test runs.
   and `BoxOAuthClient` (OAuth 2.0 user auth with an auto-refreshed,
   cross-process-locked token cache — see below). Exception hierarchy:
   `BoxError` (base) → `BoxAuthError` → `BoxNotAuthenticatedError` (no usable
-  cache; run `boxadm-mcp auth`). `server.py` callers only special-case
+  cache; run `boxadm-mcp auth`), and `BoxError` → `BoxRequestError` (an argument
+  would have built a request other than the one intended — raised instead of
+  being sent). `server.py` callers only special-case
   `BoxNotAuthenticatedError` (surfaced as `needs-login`); a bare
   `BoxAuthError` falls through to the same `except BoxError` handling as
   any other Box API failure — it is not given its own `except BoxAuthError`
   clause anywhere in `server.py` today.
+- **Ids decide the endpoint, so they are validated before interpolation.** A
+  folder id goes into the request PATH and `httpx.URL` resolves `..` segments,
+  so `../users` rewrites `/2.0/folders/../users` into `/2.0/users` — a page of
+  the enterprise directory, i.e. the enumeration `get_user` refuses. Two layers:
+  `_validate_resource_id()` (decimal-only, in each folder getter, where a useful
+  message about WHICH argument is possible) and `_assert_endpoint_intact()` in
+  `_get` (no dot segment / query / fragment, root-relative), which covers every
+  present and future path at the point the URL is assembled.
+  `BoxRequestError` is a `BoxError` on purpose so `_scan`'s per-folder handler
+  absorbs one into `fetch_errors` instead of it escaping `ThreadPoolExecutor.map`
+  as a raw traceback. That absorption is NOT the defence for a caller-supplied
+  root: `server._checked_root()` validates that up front and returns an error
+  dict, because an absorbed refusal would report a request that never left as a
+  complete, empty result.
 - `boxadm_mcp/config.py` — `allowed_domains()` reads `BOX_ALLOWED_DOMAINS`
   (comma-separated); **no organization-specific default** — an unset/empty
   value yields no domains, so `is_external()` treats every address as

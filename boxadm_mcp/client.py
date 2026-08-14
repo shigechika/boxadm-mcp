@@ -101,47 +101,77 @@ class BoxNotAuthenticatedError(BoxAuthError):
 class BoxRequestError(BoxError):
     """A caller's argument would have built a request other than the one intended.
 
-    Raised instead of being sent. Subclasses ``BoxError`` deliberately: the scan
-    tools catch ``BoxError`` per folder and count it into ``fetch_errors``, so a
-    refused id degrades exactly like an unreachable folder. A ``ValueError`` here
-    would escape ``ThreadPoolExecutor.map`` into the tool and surface as a raw
-    traceback, losing both the coverage disclosure and the structured-error shape.
+    Raised instead of being sent, and a ``BoxError`` so that ``_scan``'s per-folder
+    handler cannot be bypassed by it — a ``ValueError`` would escape
+    ``ThreadPoolExecutor.map`` and surface as a raw traceback.
+
+    Being absorbed there is not a defence on its own, and must not be mistaken for
+    one: a refused id inside a walk reads as one unreachable folder. That is why
+    ``server`` validates a CALLER-SUPPLIED id up front and answers with an error
+    dict — this class is the backstop for ids that arrive from Box's own responses
+    mid-walk, where degrading is right.
     """
 
 
-#: Box resource ids are decimal strings. The ceiling is a length bound, not a
-#: value bound: httpx raises ``InvalidURL`` on an over-long URL, and that is NOT
-#: a subclass of ``httpx.HTTPError`` (verified), so ``_get``'s handler would not
-#: catch it and the caller would get a traceback instead of an error dict.
+#: Box resource ids are decimal strings. The 20-digit ceiling is a sanity bound,
+#: not a defence: nothing downstream breaks at 21 digits (httpx only rejects a URL
+#: past 65536 characters), so treat it as "no real Box id is longer", not as a
+#: guard anything depends on.
 _ID_RE = re.compile(r"[0-9]{1,20}")
 
 
-def _validate_resource_id(value: str, *, kind: str) -> str:
-    """Return ``value`` stripped, or raise ``BoxRequestError``.
+def _validate_resource_id(value: object, *, kind: str) -> str:
+    """Return ``value`` as a validated decimal id string, or raise ``BoxRequestError``.
 
-    An id is interpolated into the request PATH, and ``httpx.URL`` resolves
-    ``..`` segments the way a browser does. So an id of ``../users`` does not
-    produce a 404 — it silently rewrites ``/2.0/folders/../users`` into
-    ``/2.0/users``, i.e. a DIFFERENT endpoint, and a query string smuggled into
-    the same argument rides along. ``/2.0/users`` with no ``filter_term`` is a
-    page of the enterprise directory, which is precisely the enumeration
-    ``get_user`` refuses to perform.
+    An id is interpolated into the request PATH, and ``httpx.URL`` resolves ``..``
+    segments the way a browser does. So an id of ``../users`` does not produce a
+    404 — it rewrites ``/2.0/folders/../users`` into ``/2.0/users``, a DIFFERENT
+    endpoint, and a query string smuggled into the same argument rides along.
+    ``/2.0/users`` with no ``filter_term`` is a page of the enterprise directory,
+    which is precisely the enumeration ``get_user`` refuses to perform.
 
-    Hence the check is on the id itself and runs before ANY interpolation, not
-    before one particular call: the danger is not specific to a path that has a
-    suffix after the id, and reasoning about a suffix ("``/items`` makes the
-    rewritten path harmless") does not hold for the suffix-less form.
+    The check runs before ANY interpolation, not before one particular call: the
+    danger is not specific to a path with a suffix after the id, and reasoning
+    about the suffix ("``/items`` makes the rewritten path harmless") does not
+    hold for the suffix-less form. ``_get`` re-checks the assembled path, so a
+    future getter that interpolates an id without calling this is still covered.
+
+    ``value`` is deliberately typed ``object``: ids arrive from Box's own JSON as
+    well as from callers, and a non-string there must become a ``BoxRequestError``
+    like any other bad id rather than an ``AttributeError`` from ``.strip()``.
+    Coercion is by ``str()``, so an ``int`` id keeps working (it did before this
+    check existed) while ``None`` becomes ``"None"`` and is refused.
 
     ``fullmatch`` rather than an anchored ``match``: ``$`` also matches before a
-    trailing newline. Stripping already removes a TRAILING one here, so the two
-    forms agree on ``"123\\n"`` — but they part company on an id whose newline is
-    interior, and ``fullmatch`` is the form that does not depend on the strip
-    above staying where it is.
+    trailing newline, so ``re.match(r"^[0-9]+$", "12\\n")`` succeeds. Stripping
+    happens to cover that particular input here — ``fullmatch`` is used so the
+    rule does not depend on the strip staying where it is.
     """
-    stripped = (value or "").strip()
+    stripped = str(value).strip()
     if not _ID_RE.fullmatch(stripped):
         raise BoxRequestError(f"invalid {kind} id: must be a decimal Box id")
     return stripped
+
+
+def _assert_endpoint_intact(path: str) -> None:
+    """Raise unless ``path`` still names the endpoint the caller wrote.
+
+    Checked on the ASSEMBLED path rather than on each id, because the id is only
+    the usual way a rewrite gets in — the property that actually matters is that
+    the request goes where the code says it goes. Anything that could make
+    ``httpx`` resolve elsewhere is refused: a dot segment, a smuggled query or
+    fragment, or a path that does not start at the root the caller wrote.
+
+    Deliberately the last line of defence and not the only one. It cannot produce
+    a good message about WHICH argument was wrong, so ``_validate_resource_id``
+    still runs first where the id is known.
+    """
+    if not path.startswith("/"):
+        raise BoxRequestError(f"invalid API path: {path!r} must be root-relative")
+    if any(seg in (".", "..") for seg in path.split("/")):
+        raise BoxRequestError(f"invalid API path: {path!r} contains a dot segment")
+    if "?" in path or "#" in path:
+        raise BoxRequestError(f"invalid API path: {path!r} carries a query or fragment")
 
 
 def default_token_cache() -> str:
@@ -307,6 +337,13 @@ class _FolderReadMixin:
         last failure is raised as ``BoxError`` (so callers still see it — e.g. _scan surfaces
         it in ``fetch_errors`` — rather than a transient throttle being masked).
         """
+        # The chokepoint. Every getter interpolates ids into `path`, and httpx
+        # resolves dot segments when it builds the URL -- so a single bad id turns
+        # this into a request against a different endpoint. Asserting on the
+        # ASSEMBLED path covers every present and future getter, including one
+        # whose author never heard of _validate_resource_id. Cheap, and it fails
+        # before a token is even fetched.
+        _assert_endpoint_intact(path)
         reauthed = False
         attempt = 0
         deadline = time.monotonic() + _MAX_RETRY_ELAPSED
@@ -358,38 +395,12 @@ class _FolderReadMixin:
         fid = _validate_resource_id(folder_id, kind="folder")
         return self._get(f"/folders/{fid}", {"fields": ",".join(fields)} if fields else None)
 
-    def get_folder_items(
-        self,
-        folder_id: str,
-        *,
-        fields: list[str] | None = None,
-        limit: int = 1000,
-        offset: int = 0,
-        sort: str | None = None,
-        direction: str | None = None,
-    ) -> dict:
-        """One page of a folder's children.
-
-        ``sort`` / ``direction`` are passed through when given. Box documents
-        ``sort`` as the **second** sort attribute — entries are ordered by TYPE
-        first (folders, then files, then web links) and only then by ``sort``. So
-        ``sort="date", direction="DESC"`` does not produce a globally newest-first
-        list; it produces newest-first *within each type*. Callers that present
-        this as "most recent" must say which.
-
-        Offset paging is Box's own caveat, not this client's: Box documents that
-        offset-based paging "is not guaranteed to work reliably for high offset
-        values" (marker paging is the reliable form). One page plus an honest
-        truncation flag is therefore sounder than deep offset walking.
-        """
+    def get_folder_items(self, folder_id: str, *, fields: list[str] | None = None, limit: int = 1000, offset: int = 0) -> dict:
+        """One page of a folder's children. See ``_validate_resource_id`` for the id check."""
         fid = _validate_resource_id(folder_id, kind="folder")
         params: dict = {"limit": limit, "offset": offset}
         if fields:
             params["fields"] = ",".join(fields)
-        if sort:
-            params["sort"] = sort
-        if direction:
-            params["direction"] = direction
         return self._get(f"/folders/{fid}/items", params)
 
     def get_folder_collaborations(self, folder_id: str) -> dict:
