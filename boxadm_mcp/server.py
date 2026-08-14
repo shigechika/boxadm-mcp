@@ -16,7 +16,15 @@ from datetime import datetime, timedelta, timezone
 
 from mcp.server.fastmcp import FastMCP
 
-from boxadm_mcp.client import BoxClient, BoxError, BoxNotAuthenticatedError, BoxOAuthClient, fetch_admin_events
+from boxadm_mcp.client import (
+    BoxClient,
+    BoxError,
+    BoxNotAuthenticatedError,
+    BoxOAuthClient,
+    BoxRequestError,
+    _validate_resource_id,
+    fetch_admin_events,
+)
 from boxadm_mcp.config import allowed_domains, is_external
 
 mcp = FastMCP("boxadm-mcp")
@@ -512,6 +520,27 @@ def _scan_concurrency(override: int | None = None) -> int:
         return _SCAN_CONCURRENCY_DEFAULT
 
 
+def _checked_root(root_folder_id: str) -> tuple[str, dict | None]:
+    """Validate a CALLER-SUPPLIED root folder id up front: ``(id, None)`` or ``(id, error)``.
+
+    The client refuses a malformed id too, but as a ``BoxError`` — which ``_scan``
+    catches per folder and counts into ``fetch_errors``. Inside a walk that is the
+    right behaviour; for the ROOT it is not, because the caller then gets a
+    complete-looking result (``count: 0``, ``capped: false``) for a folder that was
+    never queried, and reads "no findings" from a request that never left.
+
+    So the root is checked here, where the answer can be an error shape instead of
+    an empty one. Returning the STRIPPED id matters as well: ``_scan`` special-cases
+    the literal ``"0"`` (the root has no collaborations to fetch) and ``_SCAN_CACHE``
+    is keyed on it, so passing ``" 0 "`` through unnormalised would both defeat that
+    skip and take a second cache entry for a tree already walked.
+    """
+    try:
+        return _validate_resource_id(root_folder_id, kind="folder"), None
+    except BoxRequestError as e:
+        return "", {"error": str(e)}
+
+
 def _cached_scan(client, root_folder_id: str, max_folders: int, max_depth: int, want_collabs: bool) -> dict:
     # Concurrency is deliberately NOT part of the key: it changes how fast the
     # traversal runs, never what it returns, so two callers with different pool
@@ -752,7 +781,10 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
     to review who outside the organization has standing access.
 
     Args:
-        root_folder_id: Folder to start from ("0" = the user's root).
+        root_folder_id: Folder to start from ("0" = the user's root). A Box
+            folder id: decimal digits only, as shown at the end of a Box folder
+            URL. Anything else is refused with ``{"error": ...}`` before any
+            request is made, rather than being reported as an empty result.
         max_folders: Cap on folders visited (default 150); ``capped`` discloses
             when coverage was cut short.
         max_depth: Folder recursion depth (default 1 = top-level folders only).
@@ -773,6 +805,9 @@ def external_collaborators(root_folder_id: str = "0", max_folders: int = 150, ma
     expires_at), and ``skipped_externally_owned`` (folder_id, folder_name,
     owner). On failure returns ``{"error": ...}``.
     """
+    root_folder_id, bad = _checked_root(root_folder_id)
+    if bad:
+        return bad
     client, err = _connect()
     if err:
         return err
@@ -796,7 +831,10 @@ def public_shared_links(root_folder_id: str = "0", max_folders: int = 150, max_d
     URL, the highest-exposure sharing mode.
 
     Args:
-        root_folder_id: Folder to start from ("0" = the user's root).
+        root_folder_id: Folder to start from ("0" = the user's root). A Box
+            folder id: decimal digits only, as shown at the end of a Box folder
+            URL. Anything else is refused with ``{"error": ...}`` before any
+            request is made, rather than being reported as an empty result.
         max_folders: Cap on folders visited (default 150); ``capped`` discloses truncation.
         max_depth: Folder recursion depth (default 1 = top-level only; raise to reach file links inside folders).
 
@@ -807,6 +845,9 @@ def public_shared_links(root_folder_id: str = "0", max_folders: int = 150, max_d
     ``public_shared_links`` (item type/id/name, owner, access, can_download). On
     failure returns ``{"error": ...}``.
     """
+    root_folder_id, bad = _checked_root(root_folder_id)
+    if bad:
+        return bad
     client, err = _connect()
     if err:
         return err
@@ -855,6 +896,9 @@ def top_external_sharers(root_folder_id: str = "0", max_folders: int = 150, max_
     false AND ``fetch_errors`` is 0), and ``top_external_sharers`` (owner,
     external_collaborations, public_links, total). On failure ``{"error": ...}``.
     """
+    root_folder_id, bad = _checked_root(root_folder_id)
+    if bad:
+        return bad
     client, err = _connect()
     if err:
         return err

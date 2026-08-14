@@ -24,13 +24,13 @@ ROOT_ITEMS = {
     "entries": [
         {
             "type": "folder",
-            "id": "F1",
+            "id": "201",
             "name": "alpha",
             "owned_by": {"login": "ownerA@example.com"},
             "shared_link": {"access": "open", "permissions": {"can_download": True}},
         },
-        {"type": "folder", "id": "F2", "name": "beta", "owned_by": {"login": "ownerB@example.com"}, "shared_link": None},
-        {"type": "file", "id": "X", "name": "x.pdf", "owned_by": {"login": "ownerA@example.com"}, "shared_link": {"access": "open"}},
+        {"type": "folder", "id": "202", "name": "beta", "owned_by": {"login": "ownerB@example.com"}, "shared_link": None},
+        {"type": "file", "id": "501", "name": "x.pdf", "owned_by": {"login": "ownerA@example.com"}, "shared_link": {"access": "open"}},
     ],
 }
 F1_COLLABS = {
@@ -58,7 +58,7 @@ def _router():
             return httpx.Response(200, json=ROOT_ITEMS)
         if path.endswith("/collaborations"):
             counts["collab"] += 1
-            return httpx.Response(200, json=F1_COLLABS if path == "/2.0/folders/F1/collaborations" else {"entries": []})
+            return httpx.Response(200, json=F1_COLLABS if path == "/2.0/folders/201/collaborations" else {"entries": []})
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -74,7 +74,7 @@ def test_external_collaborators_external_only_and_invite():
     assert set(by) == {"ext@gmail.com", "pending@partner.example"}  # group + internal excluded
     assert out["count"] == 2
     assert by["pending@partner.example"]["collaborator_type"] == "invite"
-    assert by["ext@gmail.com"]["folder_id"] == "F1"
+    assert by["ext@gmail.com"]["folder_id"] == "201"
 
 
 def test_public_shared_links_lists_open_and_skips_collab_calls():
@@ -82,7 +82,7 @@ def test_public_shared_links_lists_open_and_skips_collab_calls():
     with r:
         out = _call(server.public_shared_links)(max_depth=1)
     ids = {p["item_id"] for p in out["public_shared_links"]}
-    assert ids == {"F1", "X"}  # F2 has no link
+    assert ids == {"201", "501"}  # 202 has no link
     assert counts["collab"] == 0  # optimization: no collaboration calls when not needed
     assert out["fetch_errors"] == 0  # clean run surfaces the disclosure field
 
@@ -114,7 +114,7 @@ EXT_OWNED_ROOT = {
         # internal-owned folder with a real external collaborator — in scope
         {
             "type": "folder",
-            "id": "F1",
+            "id": "201",
             "name": "alpha",
             "owned_by": {"login": "ownerA@example.com"},
             "is_externally_owned": False,
@@ -123,7 +123,7 @@ EXT_OWNED_ROOT = {
         # externally-owned folder (different Box enterprise) — out of scope, skipped
         {
             "type": "folder",
-            "id": "FEXT",
+            "id": "401",
             "name": "EXT_vendor",
             "owned_by": {"login": "svc@partner.example"},
             "is_externally_owned": True,
@@ -135,14 +135,14 @@ EXT_OWNED_ROOT = {
         # heuristic wrongly skipped these; the flag does not.
         {
             "type": "folder",
-            "id": "FSVC",
+            "id": "402",
             "name": "01-dept",
             "owned_by": {"login": "AutomationUser_123_abc@boxdevedition.com"},
             "is_externally_owned": False,
             "shared_link": None,
         },
         # folder with the flag absent — stays in scope (cautious toward auditing)
-        {"type": "folder", "id": "FUNK", "name": "mystery", "shared_link": None},
+        {"type": "folder", "id": "403", "name": "mystery", "shared_link": None},
     ],
 }
 
@@ -160,7 +160,7 @@ def _router_ext_owned():
         if path.endswith("/collaborations"):
             collab_paths.append(path)
             # F1 has an external collaborator; the rest have none
-            body = F1_COLLABS if path == "/2.0/folders/F1/collaborations" else {"entries": []}
+            body = F1_COLLABS if path == "/2.0/folders/201/collaborations" else {"entries": []}
             return httpx.Response(200, json=body)
         return httpx.Response(200, json={"entries": []})
 
@@ -176,24 +176,24 @@ def test_external_collaborators_skips_externally_owned_folders():
 
     # Only the folder Box flags is_externally_owned=true is skipped.
     skipped = {s["folder_id"]: s for s in out["skipped_externally_owned"]}
-    assert set(skipped) == {"FEXT"}
-    assert skipped["FEXT"]["owner"] == "svc@partner.example"
+    assert set(skipped) == {"401"}
+    assert skipped["401"]["owner"] == "svc@partner.example"
 
     # Its collaborations are never even queried (out of scope, budget-free).
-    assert "/2.0/folders/FEXT/collaborations" not in collab_paths
+    assert "/2.0/folders/401/collaborations" not in collab_paths
     # The service-account-owned in-enterprise folder IS walked (proves the skip is
     # NOT an owner-domain heuristic — boxdevedition.com would fail that heuristic).
-    assert "/2.0/folders/FSVC/collaborations" in collab_paths
+    assert "/2.0/folders/402/collaborations" in collab_paths
     # The flag-absent folder IS walked (cautious toward auditing).
-    assert "/2.0/folders/FUNK/collaborations" in collab_paths
+    assert "/2.0/folders/403/collaborations" in collab_paths
 
-    # Only the internal folder's external collaborator surfaces; nothing from FEXT.
+    # Only the internal folder's external collaborator surfaces; nothing from the externally-owned folder 401.
     by = {c["collaborator"] for c in out["external_collaborators"]}
     assert by == {"ext@gmail.com", "pending@partner.example"}
-    assert all(c["folder_id"] == "F1" for c in out["external_collaborators"])
+    assert all(c["folder_id"] == "201" for c in out["external_collaborators"])
 
     # Skipped folder does not consume the folders_scanned budget.
-    assert out["folders_scanned"] == 4  # root + F1 + FSVC + FUNK (FEXT excluded)
+    assert out["folders_scanned"] == 4  # root + 201 + 402 + 403 (401 excluded)
 
 
 def test_externally_owned_skip_is_independent_of_allowlist(monkeypatch):
@@ -205,10 +205,10 @@ def test_externally_owned_skip_is_independent_of_allowlist(monkeypatch):
     with r:
         out = _call(server.external_collaborators)(max_depth=1)
 
-    assert {s["folder_id"] for s in out["skipped_externally_owned"]} == {"FEXT"}
-    assert out["folders_scanned"] == 4  # FEXT excluded regardless of allowlist
-    assert "/2.0/folders/FEXT/collaborations" not in collab_paths
-    assert "/2.0/folders/FSVC/collaborations" in collab_paths  # in-enterprise: walked
+    assert {s["folder_id"] for s in out["skipped_externally_owned"]} == {"401"}
+    assert out["folders_scanned"] == 4  # 401 (externally owned) excluded regardless of allowlist
+    assert "/2.0/folders/401/collaborations" not in collab_paths
+    assert "/2.0/folders/402/collaborations" in collab_paths  # in-enterprise: walked
 
 
 def test_enumeration_missing_env(monkeypatch):

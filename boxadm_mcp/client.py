@@ -16,6 +16,7 @@ import fcntl
 import json
 import os
 import random
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -95,6 +96,82 @@ class BoxAuthError(BoxError):
 
 class BoxNotAuthenticatedError(BoxAuthError):
     """No usable OAuth token cache — run ``boxadm-mcp auth`` to log in."""
+
+
+class BoxRequestError(BoxError):
+    """A caller's argument would have built a request other than the one intended.
+
+    Raised instead of being sent, and a ``BoxError`` so that ``_scan``'s per-folder
+    handler cannot be bypassed by it — a ``ValueError`` would escape
+    ``ThreadPoolExecutor.map`` and surface as a raw traceback.
+
+    Being absorbed there is not a defence on its own, and must not be mistaken for
+    one: a refused id inside a walk reads as one unreachable folder. That is why
+    ``server`` validates a CALLER-SUPPLIED id up front and answers with an error
+    dict — this class is the backstop for ids that arrive from Box's own responses
+    mid-walk, where degrading is right.
+    """
+
+
+#: Box resource ids are decimal strings. The 20-digit ceiling is a sanity bound,
+#: not a defence: nothing downstream breaks at 21 digits (httpx only rejects a URL
+#: past 65536 characters), so treat it as "no real Box id is longer", not as a
+#: guard anything depends on.
+_ID_RE = re.compile(r"[0-9]{1,20}")
+
+
+def _validate_resource_id(value: object, *, kind: str) -> str:
+    """Return ``value`` as a validated decimal id string, or raise ``BoxRequestError``.
+
+    An id is interpolated into the request PATH, and ``httpx.URL`` resolves ``..``
+    segments the way a browser does. So an id of ``../users`` does not produce a
+    404 — it rewrites ``/2.0/folders/../users`` into ``/2.0/users``, a DIFFERENT
+    endpoint, and a query string smuggled into the same argument rides along.
+    ``/2.0/users`` with no ``filter_term`` is a page of the enterprise directory,
+    which is precisely the enumeration ``get_user`` refuses to perform.
+
+    The check runs before ANY interpolation, not before one particular call: the
+    danger is not specific to a path with a suffix after the id, and reasoning
+    about the suffix ("``/items`` makes the rewritten path harmless") does not
+    hold for the suffix-less form. ``_get`` re-checks the assembled path, so a
+    future getter that interpolates an id without calling this is still covered.
+
+    ``value`` is deliberately typed ``object``: ids arrive from Box's own JSON as
+    well as from callers, and a non-string there must become a ``BoxRequestError``
+    like any other bad id rather than an ``AttributeError`` from ``.strip()``.
+    Coercion is by ``str()``, so an ``int`` id keeps working (it did before this
+    check existed) while ``None`` becomes ``"None"`` and is refused.
+
+    ``fullmatch`` rather than an anchored ``match``: ``$`` also matches before a
+    trailing newline, so ``re.match(r"^[0-9]+$", "12\\n")`` succeeds. Stripping
+    happens to cover that particular input here — ``fullmatch`` is used so the
+    rule does not depend on the strip staying where it is.
+    """
+    stripped = str(value).strip()
+    if not _ID_RE.fullmatch(stripped):
+        raise BoxRequestError(f"invalid {kind} id: must be a decimal Box id")
+    return stripped
+
+
+def _assert_endpoint_intact(path: str) -> None:
+    """Raise unless ``path`` still names the endpoint the caller wrote.
+
+    Checked on the ASSEMBLED path rather than on each id, because the id is only
+    the usual way a rewrite gets in — the property that actually matters is that
+    the request goes where the code says it goes. Anything that could make
+    ``httpx`` resolve elsewhere is refused: a dot segment, a smuggled query or
+    fragment, or a path that does not start at the root the caller wrote.
+
+    Deliberately the last line of defence and not the only one. It cannot produce
+    a good message about WHICH argument was wrong, so ``_validate_resource_id``
+    still runs first where the id is known.
+    """
+    if not path.startswith("/"):
+        raise BoxRequestError(f"invalid API path: {path!r} must be root-relative")
+    if any(seg in (".", "..") for seg in path.split("/")):
+        raise BoxRequestError(f"invalid API path: {path!r} contains a dot segment")
+    if "?" in path or "#" in path:
+        raise BoxRequestError(f"invalid API path: {path!r} carries a query or fragment")
 
 
 def default_token_cache() -> str:
@@ -260,6 +337,13 @@ class _FolderReadMixin:
         last failure is raised as ``BoxError`` (so callers still see it — e.g. _scan surfaces
         it in ``fetch_errors`` — rather than a transient throttle being masked).
         """
+        # The chokepoint. Every getter interpolates ids into `path`, and httpx
+        # resolves dot segments when it builds the URL -- so a single bad id turns
+        # this into a request against a different endpoint. Asserting on the
+        # ASSEMBLED path covers every present and future getter, including one
+        # whose author never heard of _validate_resource_id. Cheap, and it fails
+        # before a token is even fetched.
+        _assert_endpoint_intact(path)
         reauthed = False
         attempt = 0
         deadline = time.monotonic() + _MAX_RETRY_ELAPSED
@@ -307,16 +391,22 @@ class _FolderReadMixin:
         return True
 
     def get_folder(self, folder_id: str, *, fields: list[str] | None = None) -> dict:
-        return self._get(f"/folders/{folder_id}", {"fields": ",".join(fields)} if fields else None)
+        """One folder's own record. See ``_validate_resource_id`` for why the id is checked."""
+        fid = _validate_resource_id(folder_id, kind="folder")
+        return self._get(f"/folders/{fid}", {"fields": ",".join(fields)} if fields else None)
 
     def get_folder_items(self, folder_id: str, *, fields: list[str] | None = None, limit: int = 1000, offset: int = 0) -> dict:
+        """One page of a folder's children. See ``_validate_resource_id`` for the id check."""
+        fid = _validate_resource_id(folder_id, kind="folder")
         params: dict = {"limit": limit, "offset": offset}
         if fields:
             params["fields"] = ",".join(fields)
-        return self._get(f"/folders/{folder_id}/items", params)
+        return self._get(f"/folders/{fid}/items", params)
 
     def get_folder_collaborations(self, folder_id: str) -> dict:
-        return self._get(f"/folders/{folder_id}/collaborations")
+        """One folder's collaborations. See ``_validate_resource_id`` for why the id is checked."""
+        fid = _validate_resource_id(folder_id, kind="folder")
+        return self._get(f"/folders/{fid}/collaborations")
 
     def get_users(
         self,
