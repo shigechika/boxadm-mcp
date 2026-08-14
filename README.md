@@ -29,6 +29,7 @@ Named after the admin-console viewpoint (`boxadm` = Box admin), sibling of
 | `external_collaborators` | Exposure (enumeration) | Lists external collaborators (outside-org login or external invite email) |
 | `public_shared_links` | Exposure (enumeration) | Lists items shared with an `open` (anyone-with-the-link) share link |
 | `top_external_sharers` | Exposure (enumeration) | Ranks internal owners by external exposure (external collabs + public links) |
+| `get_user` | Account state (lookup) | One account by its **exact login**: `status`, `role`, `enterprise`, quota, timestamps. Answers "is this account disabled?" without an admin console |
 | `daily_brief` | Combined | Morning summary combining access (events) and exposure (enumeration) |
 
 ## Auth model
@@ -123,6 +124,10 @@ and be safely committed.
   false **and** `fetch_errors` is 0.
 - Enumeration tools share a short-TTL scan memo across calls;
   `public_shared_links` skips collaboration calls entirely (optimization).
+- **`get_user`** reads the enterprise **user directory** instead — one request,
+  no paging, no enumeration (it answers about the login you pass and nothing
+  else). Its `capped` flag discloses a truncated search, so a `found: false`
+  from a truncated result reads as inconclusive rather than negative.
 
 ### DLP tracing (reverse-lookup by accessor)
 
@@ -144,6 +149,39 @@ external_access_events(since_hours=26, created_by_logins="someone@example.com")
   `capped: true` means the window wasn't fully scanned — raise `max_events`.
 - Box's `admin_logs` API has no `created_by` query parameter, so this is a
   client-side filter (`fetch_admin_events(created_by_logins=...)`).
+
+### Per-account lookup (`get_user`)
+
+Every other tool reads the event stream or walks folders, so an account with no
+recent activity cannot be asked about at all. `get_user` answers directly —
+"is this account disabled, and is its quota full?" — in one request:
+
+```
+get_user(login="someone@example.com")
+```
+
+`login` is the account's full Box login (an email address), matched **exactly
+and case-insensitively**. That matching is the point, not an implementation
+detail: Box's underlying `filter_term` is a **prefix search over display name
+and login**, so the endpoint readily returns a colleague whose name starts with
+the same letters. Only an exact login match lands in `user`; everything else is
+quarantined under `near_misses` (id / name / login only) with a `note` saying so.
+
+| Field | Meaning |
+|---|---|
+| `found` | The only field that says whether the account exists. `false` is a normal answer, not an error |
+| `user` | The account when `found`, else `null`: `status`, `role`, `enterprise`, `space_used` / `space_amount`, `created_at`, `modified_at` |
+| `near_misses` | **Other** accounts the prefix search returned — never the one asked about |
+| `capped` | The search was truncated, so `found: false` is inconclusive rather than negative |
+| `search_hits`, `note` | How many entries came back, and a plain-language reading |
+
+> [!NOTE]
+> Whether `/2.0/users` is reachable **has not been verified end-to-end** in
+> either auth mode, so this README deliberately claims no scope requirement for
+> it. Under `oauth` the effective permission is the authorising user's. A
+> permission failure returns `likely_cause` naming the two things to check —
+> that user's Box role, and the app's Application Scopes — rather than a bare
+> HTTP status.
 
 ## Usage
 
@@ -222,8 +260,10 @@ uv run python scripts/smoke_test.py --only shared_links --traceback
   parameters from the source.
 - **Nothing enterprise-specific in the specs.** A test bans address shapes
   (login, URL, hostname, IPv4, IPv6) and the parameters that carry an account
-  name, because this repository is public. The only literal identifier is
-  folder id `0`, which is the root folder in every enterprise.
+  name, because this repository is public. Two literals identify nobody and are
+  allowed: folder id `0`, the root folder in every enterprise, and the made-up
+  term `get_user` is probed with — an account that cannot exist, so the probe
+  asserts the not-found path rather than naming a real person.
 - An empty answer passes: no public links and no external collaborators is the
   desired state, so probes assert the accounting envelope (`count`,
   `folders_scanned`, `window_hours`) rather than a row count.

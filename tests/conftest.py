@@ -17,6 +17,7 @@ os.environ.setdefault("BOX_API_BASE", "https://api.box.com")
 
 TOKEN_URL = "https://api.box.com/oauth2/token"
 EVENTS_URL = "https://api.box.com/2.0/events"
+USERS_URL = "https://api.box.com/2.0/users"
 
 SAMPLE_EVENT = {
     "type": "event",
