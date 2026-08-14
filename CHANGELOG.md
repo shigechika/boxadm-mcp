@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/shigechika/boxadm-mcp/compare/v0.7.0...v0.7.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **deps:** restore the mcp &lt;2 pin and stop Dependabot relaxing it again ([#50](https://github.com/shigechika/boxadm-mcp/issues/50)) ([e393106](https://github.com/shigechika/boxadm-mcp/commit/e39310666a8dce80f6cf39cd64689403687bd5fb))
+
 ## [0.7.0](https://github.com/shigechika/boxadm-mcp/compare/v0.6.1...v0.7.0) (2026-08-14)
 
 
