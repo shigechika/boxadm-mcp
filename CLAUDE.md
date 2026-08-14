@@ -26,12 +26,15 @@ test runs.
 
 ## Architecture
 
-- `boxadm_mcp/server.py` — FastMCP server with 8 tools: `health_check`,
+- `boxadm_mcp/server.py` — FastMCP server with 9 tools: `health_check`,
   `recent_admin_events` (raw diagnostic), `external_access_events`
   (enterprise-wide DOWNLOAD/PREVIEW analytics, plus a `created_by_logins`
   DLP-tracing mode), `external_collaborators` / `public_shared_links` /
   `top_external_sharers` (enumeration over the co-admin's visible folders,
-  BFS via `_scan()`), `get_user` (one account's current state by exact login —
+  BFS via `_scan()`), `list_folder_items` (one folder's contents, with uploader attribution from
+  `uploader_display_name` — `created_by`/`modified_by` are "Anonymous User"
+  for a File Request upload, and `since`/`until` are compared as instants
+  because Box's offset differs from the caller's), `get_user` (one account's current state by exact login —
   see below), and `daily_brief` (synthesis of both). `_SCAN_CACHE`
   memoizes `_scan()` results for 60s (`_SCAN_TTL`) keyed on
   `(root_folder_id, max_folders, max_depth, want_collabs)`, so
