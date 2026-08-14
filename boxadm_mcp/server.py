@@ -5,6 +5,7 @@ Read-only. Tools:
 - ``external_access_events`` — enterprise-wide DOWNLOAD/PREVIEW analytics (events)
 - ``external_collaborators`` / ``public_shared_links`` / ``top_external_sharers``
   — current-state enumeration over the co-admin's visible folders
+- ``get_user`` — one account's current state, looked up by its exact login
 - ``daily_brief`` — morning synthesis of access (events) + exposure (enumeration)
 """
 
@@ -864,6 +865,224 @@ def top_external_sharers(root_folder_id: str = "0", max_folders: int = 150, max_
         "capped": scan["capped"],
         "fetch_errors": scan["fetch_errors"],
         "top_external_sharers": _rank_external_sharers(scan)[:top],
+    }
+
+
+# Fields asked for on the per-user lookup. Box answers ``GET /users`` with a minimal
+# user object (id / type / name / login) unless asked for more, and everything that
+# answers "why can this person not use Box" — status, role, quota — is in the "more".
+# All of them ride on the same GET, so the explicit list costs no extra call.
+USER_LOOKUP_FIELDS = [
+    "id",
+    "name",
+    "login",
+    "status",
+    "role",
+    "enterprise",
+    "is_platform_access_only",
+    "created_at",
+    "modified_at",
+    "space_used",
+    "space_amount",
+]
+
+# One page is asked for and truncation is disclosed, rather than paging: a login
+# lookup that needs paging has stopped being a lookup. A login is unique, and Box
+# prefix-matches it, so the realistic hit count is a handful — but ``capped`` still
+# says so when it is not, because "no exact match in a truncated page" is a weaker
+# statement than "no such account", and only one of them is safe to act on.
+_USER_SEARCH_LIMIT = 100
+
+
+_NOT_FOUND_NOTE = (
+    "No account carries this exact login. The login may not exist, may be spelled differently, or may be "
+    "outside what this app's permissions can see. other_prefix_hits counts further matches on the same prefix; "
+    "those are different accounts and are deliberately not identified."
+)
+_NOT_FOUND_CAPPED_NOTE = (
+    "INCONCLUSIVE, not a negative answer: the search was truncated (capped), so an exact match may exist beyond "
+    "the returned page. Do not report this as 'no such account'."
+)
+_FOUND_NOTE = "Exact, case-insensitive match on login."
+
+
+def _login_is(entry: dict, wanted_lower: str) -> bool:
+    """True when this search hit's login IS the requested one (exact, case-insensitive).
+
+    The whole point of the tool: Box's prefix search returns accounts that merely start
+    with the term, so membership in the result set is not identity. Case is folded
+    because a login is an email address and Box echoes it as stored, which need not be
+    the casing the caller typed.
+    """
+    return (entry.get("login") or "").strip().lower() == wanted_lower
+
+
+def _is_email_shaped(term: str) -> bool:
+    """True when ``term`` looks like a login, i.e. has a non-empty local part and domain.
+
+    Not validation -- Box owns that. This only separates "a login" from "a fragment",
+    because ``filter_term`` prefix-matches display name AND login with no minimum
+    length, so a fragment is a directory listing rather than a lookup.
+    """
+    local, sep, domain = (term or "").strip().partition("@")
+    return bool(local and sep and domain)
+
+
+def _user_lookup_hint(message: str) -> str | None:
+    """Actionable cause for a permission failure on the user lookup, else None.
+
+    ``/2.0/users`` is not verified end-to-end in either auth mode (see ``get_user``),
+    so a bare "HTTP 403" leaves an operator with nothing to act on. The two things
+    worth checking are named instead — deliberately without asserting which scope is
+    required, because that has not been confirmed here. Keyed off the message
+    ``_get`` raises (``HTTP <status>: GET <path>``).
+    """
+    if "HTTP 403" in message or "HTTP 401" in message:
+        return (
+            "The app could not read the enterprise user directory. This is a permission result, not a statement about the account: "
+            "in oauth mode the effective permission is the AUTHORISING user's, so check that user's Box role (an admin / co-admin "
+            "with user visibility), and check the app's Application Scopes in the Box Developer Console. Which scope this endpoint "
+            "requires has not been verified end-to-end for this server."
+        )
+    return None
+
+
+@mcp.tool()
+def get_user(login: str) -> dict:
+    """Look up ONE Box account by its exact login (the account's email address).
+
+    Answers "what is this account's state?" — the question behind a ticket that says
+    "my Box account is disabled". Every other tool here reads the event stream or walks
+    folders, so an account with no recent events is invisible to them; this is one
+    request against the user directory and the only tool that answers about an account
+    directly. Use it when a specific account is named. It cannot list, search or
+    enumerate accounts: it takes one login and answers about that login only.
+
+    Args:
+        login: The account's full Box login, i.e. its email address
+            (``someone@example.com``) — not a display name, not a user id. Matched
+            EXACTLY, case-insensitively. A partial login does not match.
+
+    This server is downstream of an identity provider, not the master. Read what comes
+    back as "what Box currently believes", and compare it against the IdP's own record
+    (which is authoritative for who the account is). A disagreement is the finding, and
+    is usually drift on the Box side rather than a mistyped address:
+
+    - ``enterprise`` absent/null — the account is no longer in the enterprise (it has
+      become a free personal account), so enterprise SSO no longer applies to it even
+      though the IdP still authenticates the person. Box classes such an account as
+      *external* and returns it only on a COMPLETE login match, which is exactly what
+      this tool asks for — so it is reachable here, and a partial login would silently
+      lose it.
+    - ``status`` other than ``active`` — the IdP authenticates, Box refuses.
+    - ``is_platform_access_only`` true — an App User, which cannot sign in interactively
+      at all.
+
+    One drift this tool cannot find for you: the same person under a second login at
+    another domain (an alias, or a duplicate left by a migration). ``filter_term``
+    prefix-matches the WHOLE term, so a search for ``alice@old.example`` can never return
+    ``alice@new.example``. Finding that would take a search on the local part alone,
+    which is a prefix search over the directory and is refused here by design. Ask the
+    identity provider which login it asserts, and look that one up.
+
+    Returns two shapes, distinguished by whether the lookup completed.
+
+    On a completed lookup:
+    - ``requested_login`` — what was asked for, echoed back.
+    - ``found`` — bool. **The only field that says whether the account was found.**
+    - ``user`` — the account when ``found`` is true, else ``null``: id, name, login,
+      ``status`` (``active`` / ``inactive`` / …, the usual answer to "why can't I sign
+      in"), ``role``, ``enterprise``, ``space_used`` / ``space_amount`` (quota
+      exhaustion is another recurring cause), ``created_at``, ``modified_at``.
+    - ``other_prefix_hits`` — how many further accounts the prefix search matched. A
+      COUNT ONLY: those are different accounts and are deliberately not identified, so
+      this can never be used to browse the directory.
+    - ``search_hits`` — how many entries the search returned.
+    - ``capped`` — true when the search result was truncated, so ``found: false`` is
+      inconclusive rather than negative (``note`` says so).
+    - ``note`` — plain-language reading of the above.
+
+    Why the filtering matters: Box's ``filter_term`` is a **prefix search over display
+    name AND login**, not a lookup, so it happily returns somebody else — a colleague
+    whose display name starts with the same letters. ``user`` is therefore only ever an
+    exact login match, no other hit is ever identified, and a term that is not
+    email-shaped is refused before the request is made (a one-character term would
+    otherwise return a page of real accounts).
+
+    On failure the other shape is returned: ``{"error": ...}`` (missing env / ``needs-login`` for an expired
+    OAuth session / a Box API error), plus ``likely_cause`` when the failure was a
+    permission one. **``found`` is absent from that shape on purpose** — a failed lookup
+    is not a negative answer, and must never be read as "no such account". Auth caveat,
+    stated honestly: this server supports two auth modes,
+    and under ``oauth`` the effective permission is the authorising user's. Whether
+    ``/2.0/users`` is reachable **has not been verified end-to-end** in either mode, and
+    no scope requirement is claimed here that was not confirmed — a permission failure
+    therefore points at the authorising user's role and the app's Application Scopes
+    rather than asserting which one is at fault.
+    """
+    needle = login.strip()
+    if not needle:
+        # An empty filter_term is not an empty search: Box would answer with a page of
+        # the enterprise directory, which is the enumeration this tool exists to avoid.
+        # Refused before any API call.
+        return {"error": "login is required: pass the account's exact Box login (an email address)"}
+
+    if not _is_email_shaped(needle):
+        # filter_term is a PREFIX search over display name AND login, so a short or
+        # name-shaped term matches strangers: "a" returns a page of real accounts. A
+        # login is an email address, and requiring that shape is what keeps this a
+        # lookup. Refused before any API call -- the request itself is the leak.
+        return {
+            "error": (
+                "login must be a full Box login (an email address). A display name or a "
+                "partial string is a prefix search over the whole directory, not a lookup"
+            )
+        }
+
+    client, err = _connect()
+    if err:
+        return err
+    try:
+        resp = client.get_users(filter_term=needle, fields=USER_LOOKUP_FIELDS, limit=_USER_SEARCH_LIMIT)
+    except BoxNotAuthenticatedError as e:
+        reset_client()
+        return {"error": f"needs-login: {e}"}
+    except BoxError as e:
+        reset_client()
+        result = {"error": str(e)}
+        hint = _user_lookup_hint(str(e))
+        if hint:
+            result["likely_cause"] = hint
+        return result
+
+    entries = resp.get("entries") or []
+    wanted = needle.lower()
+    exact = [e for e in entries if _login_is(e, wanted)]
+    # Non-exact hits are counted, never identified: they are different accounts, and
+    # returning their id/name/login turned this lookup into a page of the enterprise
+    # directory.
+    other_prefix_hits = sum(1 for e in entries if not _login_is(e, wanted))
+
+    # Truncation disclosure, same contract as the scan tools' `capped`: a "not found"
+    # computed over a partial result is not a negative answer. total_count is Box's own
+    # figure; if it is absent, a full page is assumed to be truncated.
+    total = resp.get("total_count")
+    capped = total > len(entries) if isinstance(total, int) else len(entries) >= _USER_SEARCH_LIMIT
+
+    if exact:
+        note = _FOUND_NOTE
+    else:
+        note = _NOT_FOUND_CAPPED_NOTE if capped else _NOT_FOUND_NOTE
+    return {
+        "requested_login": needle,
+        "found": bool(exact),
+        "user": exact[0] if exact else None,
+        # Count only, never identities: these are other accounts that merely share the
+        # prefix. Reported so a caller knows the search was not empty.
+        "other_prefix_hits": other_prefix_hits,
+        "search_hits": len(entries),
+        "capped": capped,
+        "note": note,
     }
 
 

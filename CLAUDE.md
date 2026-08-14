@@ -26,12 +26,13 @@ test runs.
 
 ## Architecture
 
-- `boxadm_mcp/server.py` — FastMCP server with 7 tools: `health_check`,
+- `boxadm_mcp/server.py` — FastMCP server with 8 tools: `health_check`,
   `recent_admin_events` (raw diagnostic), `external_access_events`
   (enterprise-wide DOWNLOAD/PREVIEW analytics, plus a `created_by_logins`
   DLP-tracing mode), `external_collaborators` / `public_shared_links` /
   `top_external_sharers` (enumeration over the co-admin's visible folders,
-  BFS via `_scan()`), and `daily_brief` (synthesis of both). `_SCAN_CACHE`
+  BFS via `_scan()`), `get_user` (one account's current state by exact login —
+  see below), and `daily_brief` (synthesis of both). `_SCAN_CACHE`
   memoizes `_scan()` results for 60s (`_SCAN_TTL`) keyed on
   `(root_folder_id, max_folders, max_depth, want_collabs)`, so
   `external_collaborators`/`top_external_sharers` (same `want_collabs=True`
@@ -67,7 +68,9 @@ test runs.
   (`is_external(owner)`) was tried and reverted as a production regression (it
   collapsed ~190 audited folders to 9).
 - `boxadm_mcp/client.py` — two read-only client classes sharing
-  `_FolderReadMixin`: `BoxClient` (Client Credentials Grant, server-to-server)
+  `_FolderReadMixin` (the shared authenticated GET plus the folder/collaboration
+  getters and `get_users()`, so one implementation serves both auth modes):
+  `BoxClient` (Client Credentials Grant, server-to-server)
   and `BoxOAuthClient` (OAuth 2.0 user auth with an auto-refreshed,
   cross-process-locked token cache — see below). Exception hierarchy:
   `BoxError` (base) → `BoxAuthError` → `BoxNotAuthenticatedError` (no usable
@@ -86,6 +89,36 @@ test runs.
   `cache_lock`/`write_token_cache` path `BoxOAuthClient` uses for refreshes.
 - `boxadm_mcp/__main__.py` — CLI entry point (`--version`/`auth`) and the
   `mcp.run()` stdio server start.
+
+### `get_user` — a search endpoint used as a lookup
+
+`get_user(login)` is the only tool that answers about one named account (every
+other one reads the event stream or walks folders, so an account with no recent
+activity is invisible to them). It is backed by `GET /2.0/users?filter_term=`,
+and the gap between what that endpoint does and what the tool promises is the
+whole design:
+
+- **`filter_term` is a prefix search over display name AND login**, so it
+  returns zero, one or several accounts and a display-name hit is somebody
+  else. The tool filters to an exact, case-insensitive `login` match; anything
+  else is only counted, in `other_prefix_hits`. A term that is not email-shaped
+  is refused before the request — identifying every prefix hit had made a
+  one-character term return a page of the directory. Note the endpoint cannot
+  find an alias at another domain: it prefix-matches the whole term. There is a `note` saying
+  those are not the requested account. `found: false` is a first-class answer,
+  never an `{"error": ...}` — a confident wrong account is worse than a clean
+  not-found, and the smoke probe asserts exactly that path.
+- **`capped`** follows the repo-wide rule: one page is requested
+  (`_USER_SEARCH_LIMIT`) and truncation is disclosed, because a `found: false`
+  computed over a truncated result set is inconclusive, not negative.
+- **An empty login is refused before the request**, since Box reads an empty
+  `filter_term` as "no filter" and would answer with a page of the directory.
+- **`/2.0/users` reachability is not verified end-to-end** in either auth mode
+  (under `oauth` the effective permission is the authorising user's), so no
+  scope requirement is asserted anywhere; a 401/403 returns `likely_cause`
+  naming the authorising user's role and the app's Application Scopes as the
+  two things to check. Confirm it against a live tenant before writing a scope
+  claim into the README.
 
 ### Box refresh-token rotation — the highest-stakes invariant in this codebase
 
@@ -116,7 +149,7 @@ a rotation).
   or an events-window cap hit) so partial coverage is never mistaken for
   "nothing found" — see the coverage notes in each tool's docstring.
 - Tests use `respx` for HTTP-level mocking (`tests/conftest.py`'s
-  `make_router()`/`TOKEN_URL`/`EVENTS_URL`) and call tools through a
+  `make_router()`/`TOKEN_URL`/`EVENTS_URL`/`USERS_URL`) and call tools through a
   `_call()` helper (`getattr(tool, "fn", tool)`) rather than calling the
   `@mcp.tool()`-decorated function directly, so the suite keeps working
   regardless of whether the installed `mcp` version's tool decorator

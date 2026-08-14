@@ -27,6 +27,13 @@ from smoke_harness import Probe  # noqa: E402
 #: time (12:34:56) and a Python slice (a[::2]) do not read as addresses, and
 #: loopback/unspecified forms (::1, ::) are not matched at all — they identify
 #: no site.
+#: Names RFC 2606 / RFC 6761 reserve so they can never belong to anyone. A literal
+#: under one of these cannot identify this (or any) enterprise, which is the only
+#: thing the checks below exist to keep out of a public repository — so they are
+#: exempt, by name. Nothing else is: the exemption is a short closed list, not a
+#: pattern, precisely so it cannot quietly grow to cover a real domain.
+RESERVED_DOMAINS = ("example.invalid", "example.com", "example.net", "example.org", "example.test")
+
 ADDRESS_SHAPES = {
     "email address": r"[\w.+-]+@[\w-]+\.[\w.]+",
     "URL": r"https?://",
@@ -46,8 +53,14 @@ ADDRESS_SHAPES = {
 #: like one.
 #:
 #: ``root_folder_id`` is deliberately absent. Box numbers the root folder "0" in
-#: every enterprise, so naming it identifies none, and the probes use nothing
-#: else.
+#: every enterprise, so naming it identifies none.
+#:
+#: ``get_user``'s ``login`` is deliberately absent too, for a different reason:
+#: its probe passes a made-up term no account can hold, precisely so the
+#: not-found path — where a fuzzy hit would otherwise be reported as an answer —
+#: is the one exercised. Banning the key would force that probe to discover a
+#: real login instead, which is the opposite of what this file is protecting.
+#: The address-shape scan below still refuses any real login written here.
 IDENTIFIER_ARGS = {"created_by_logins"}
 
 #: Parameters that bound how much work a tool does. A scheduled probe must pass
@@ -221,6 +234,18 @@ def test_no_account_identifying_arguments_are_hardcoded():
     )
 
 
+def _is_reserved(literal: str) -> bool:
+    """True when ``literal`` sits in a name the RFCs reserve for documentation.
+
+    Matched on a label boundary, not as a bare suffix: ``endswith("example.com")``
+    also accepts ``corp-example.com``, which is a perfectly real domain — so the
+    exemption meant for documentation names would have waved a live enterprise
+    address straight past the guard below.
+    """
+    host = literal.rsplit("@", 1)[-1].rstrip("/").lower()
+    return any(host == d or host.endswith("." + d) for d in RESERVED_DOMAINS)
+
+
 def test_no_enterprise_specific_literals_in_specs():
     """This repository is public: probes must not name the enterprise.
 
@@ -232,7 +257,57 @@ def test_no_enterprise_specific_literals_in_specs():
     exists to prevent.
     """
     source = (Path(__file__).resolve().parent.parent / "scripts" / "smoke_probes.py").read_text(encoding="utf-8")
-    hits = [label for label, pattern in ADDRESS_SHAPES.items() if re.search(pattern, source)]
+    hits = {}
+    for label, pattern in ADDRESS_SHAPES.items():
+        found = [m for m in re.findall(pattern, source) if not _is_reserved(m)]
+        if found:
+            hits[label] = sorted(set(found))
     assert not hits, (
         f"address-like literals in smoke_probes.py: {hits}. Discover such arguments at run time (args_factory) rather than hardcoding them."
     )
+
+
+def test_reserved_domain_exemption_matches_on_a_label_boundary():
+    """A real domain that merely ends in a reserved name must stay banned.
+
+    ``corp-example.com`` and ``notexample.invalid`` are ordinary registrable
+    domains. A suffix test accepts both, which turns the documentation-name
+    exemption into a hole big enough for a live address.
+    """
+    for reserved in ("user@example.com", "files.example.invalid", "example.test", "sub.example.org"):
+        assert _is_reserved(reserved), f"should be exempt: {reserved}"
+    for real in ("employee@corp-example.com", "notexample.invalid", "myexample.test", "example.community"):
+        assert not _is_reserved(real), f"must NOT be exempt: {real}"
+
+
+def test_reserved_domain_exemption_rejects_a_real_domain_under_an_example_label():
+    """The specific hole the shape-based version of the guard above had.
+
+    ``example.corp-acme.com`` is registrable and real, yet starts with ``example.``;
+    admitting it to RESERVED_DOMAINS would exempt that whole host from the
+    public-repository address scan. Pinned so the guard cannot regress to a shape test.
+    """
+    rfc2606 = {"example.com", "example.net", "example.org"}
+
+    def accepted(name: str) -> bool:
+        return name in rfc2606 or name.rsplit(".", 1)[-1] in ("invalid", "test")
+
+    for reserved in RESERVED_DOMAINS:
+        assert accepted(reserved), reserved
+    for real in ("example.corp-acme.com", "example.co.jp", "example.acme.net", "exampled.com"):
+        assert not accepted(real), f"must NOT be admissible: {real}"
+
+
+def test_reserved_domain_exemption_covers_only_reserved_names():
+    """Guards the exemption itself from growing to cover a real domain.
+
+    The check above stops rejecting a literal once it sits under a RESERVED_DOMAINS
+    entry, so that list is the one place where adding a line would silently let a
+    real address into a public repository. Every entry must be a name the RFCs
+    reserve, tested as a closed set rather than by shape: a ``startswith("example.")``
+    rule also accepts ``example.corp-acme.com``, an ordinary registrable domain,
+    which would exempt every address at that host and all of its subdomains.
+    """
+    rfc2606 = {"example.com", "example.net", "example.org"}
+    for name in RESERVED_DOMAINS:
+        assert name in rfc2606 or name.rsplit(".", 1)[-1] in ("invalid", "test"), name

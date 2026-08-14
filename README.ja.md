@@ -26,6 +26,7 @@ events は見られない — それこそがこのサーバの存在意義。
 | `external_collaborators` | 露出（列挙） | 外部 collaborator（組織外 login / 外部招待メール）を列挙 |
 | `public_shared_links` | 露出（列挙） | `open`（誰でもリンク）共有の item を列挙 |
 | `top_external_sharers` | 露出（列挙） | 内部 owner を外部露出（外部 collab + 公開リンク）で順位付け |
+| `get_user` | アカウント状態（単体照会） | **login 完全一致**で1アカウントを照会。`status`・`role`・`enterprise`・容量・日時を返す。管理コンソールを開かずに「このアカウントは無効化されているか」に答える |
 | `daily_brief` | 統合 | アクセス（events）× 露出（列挙）の朝サマリ |
 
 ## 認証方式
@@ -118,6 +119,10 @@ secret は `.mcp.json` に直書きせず（例: 起動前に読み込むロー�
 - 列挙系ツールは短 TTL のスキャンメモを呼び出し間で共有する。
   `public_shared_links` は collaboration 呼び出しを一切行わない
   （最適化）。
+- **`get_user`** はこれらとは別で、enterprise の**ユーザーディレクトリ**を
+  1リクエストだけ読む。ページングは行わず、構造的に列挙にならない（渡された login に
+  ついてのみ答える）。検索結果が切り詰められた場合は `capped` で開示し、
+  その場合の `found: false` は「存在しない」ではなく「判定不能」を意味する。
 
 ### DLP 追跡（accessor からの逆引き）
 
@@ -141,6 +146,45 @@ external_access_events(since_hours=26, created_by_logins="someone@example.com")
 - Box の `admin_logs` API には `created_by` クエリパラメータが無いため、
   クライアント側フィルタで実現している（`fetch_admin_events
   (created_by_logins=...)`）。
+
+### アカウント単体照会（`get_user`）
+
+他のツールは events ストリームを読むかフォルダを歩くため、直近の動きが無い
+アカウントについては何も答えられない。`get_user` は1リクエストで直接答える
+— 「このアカウントは無効化されているか、容量は逼迫していないか」:
+
+```
+get_user(login="someone@example.com")
+```
+
+`login` はアカウントの Box login（メールアドレス）そのもので、**完全一致・
+大文字小文字を無視**して照合する。この照合こそが本質で、実装の細部ではない：
+裏で使う Box の `filter_term` は**表示名と login に対する前方一致検索**なので、
+頭文字が同じ別人を平然と返す。`user` に入るのは login 完全一致のみで、それ以外
+の hit は `other_prefix_hits` に件数だけ数え、識別情報は返さない。メールアドレスの
+形をしていない検索語はリクエスト前に拒否する（`filter_term` に最小長は無く、1文字でも
+実在アカウントが1ページ返ってしまうため）。
+
+なお、**同一人物が別ドメインの2つ目の login を持つ**ドリフトはこのツールでは見つけ
+られない。`filter_term` は検索語全体への前方一致なので、`alice@old.example` で検索して
+`alice@new.example` が返ることはない。それを探すにはローカル部だけでの検索が必要で、
+それは本ツールが設計上拒否しているディレクトリ全体への前方一致にあたる。
+その場合は IdP（KeyCloak）にどの login を主張しているか聞き、その login で引き直す。
+
+| フィールド | 意味 |
+|---|---|
+| `found` | アカウントが存在したかを示す唯一のフィールド。`false` はエラーではなく正常な回答 |
+| `user` | `found` のときのアカウント、無ければ `null`： `status`・`role`・`enterprise`・`space_used` / `space_amount`・`created_at`・`modified_at` |
+| `other_prefix_hits` | それ以外の前方一致の**件数のみ**。別のアカウントなので識別情報は返さない |
+| `capped` | 検索結果が切り詰められた合図。この場合の `found: false` は否定ではなく判定不能 |
+| `search_hits`・`note` | 返ってきた件数と、以上を平文で言い直したもの |
+
+> [!NOTE]
+> `/2.0/users` に到達できるかは**どちらの認証モードでも実地検証できていない**
+> ため、この README では必要スコープをあえて断定しない。`oauth` モードでは
+> 実効権限は認可したユーザー本人のものになる。権限エラー時は素の HTTP
+> ステータスではなく `likely_cause` を返し、確認すべき2点 — そのユーザーの
+> Box ロールと、アプリの Application Scopes — を名指しする。
 
 ## 使い方
 
@@ -215,7 +259,9 @@ uv run python scripts/smoke_test.py --only shared_links --traceback
   ソースから上限パラメータを見つけて強制するテスト付き。
 - **エンタープライズ固有の値を spec に書かない**。公開リポジトリなので、アドレス的な形
   （ログイン・URL・ホスト名・IPv4・IPv6）とアカウント名を運ぶパラメータをテストで禁止している。
-  唯一の直値はフォルダ ID `0`（どのエンタープライズでもルート）。
+  誰も特定しない直値は2つだけ許す： フォルダ ID `0`（どのエンタープライズでもルート）と、
+  `get_user` の probe に使う**存在し得ない架空の login**（実在の人物を書かずに
+  「見つからない」経路を検証するため）。
 - 応答が空でも合格とする。公開リンクゼロ・外部コラボレーターゼロは望ましい状態なので、
   probe は件数ではなく会計項目（`count`・`folders_scanned`・`window_hours`）を表明する。
 - CI では安価な半分を強制する。probe spec の無いツールを登録するとビルドが失敗するので

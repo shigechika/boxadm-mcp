@@ -154,13 +154,25 @@ collaborations count as an external-sharing finding.
   `Authorization` header, or a raw token value in a tool response or error
   string — including at a hypothetical debug log level (this codebase has
   no logging module currently; don't introduce one that could leak these).
-- Tool inputs (`root_folder_id`, `event_types`, `created_by_logins`, window
-  sizes) come from an LLM acting on a user's behalf — treat them as
-  adversarial. `external_access_events`' `created_by_logins` parsing
-  (split on `,`, strip, drop empties) is the existing pattern for a
-  delimited free-text input; a new similar parameter should handle
-  empty/malformed input the same defensive way rather than passing it
-  straight into an API call.
+- Tool inputs (`root_folder_id`, `event_types`, `created_by_logins`,
+  `get_user`'s `login`, window sizes) come from an LLM acting on a user's
+  behalf — treat them as adversarial. `external_access_events`'
+  `created_by_logins` parsing (split on `,`, strip, drop empties) is the
+  existing pattern for a delimited free-text input; a new similar parameter
+  should handle empty/malformed input the same defensive way rather than
+  passing it straight into an API call. `get_user` is the sharper case: it
+  refuses any `login` that is not
+  email-shaped **before** the request, because `filter_term` is a prefix
+  search with no minimum length -- an empty term means "no filter", and a
+  one-character term is just as wide, so both turn a lookup into a page of
+  the user directory. Rejecting only the empty form is NOT enough, and the
+  same reasoning applies on the way out: `get_user` identifies a hit only on
+  an exact login match, and merely counts every other one. Treat any change
+  that names a non-exact hit as reopening this hole -- an earlier draft
+  reported "near misses" and returned 100 real accounts from a one-character
+  term.
+  Flag a new parameter reaching an API call when a *narrow-looking* value of
+  it still means something wider than what was asked for.
 - A new `@mcp.tool()`'s name and docstring are what the calling model uses
   to decide whether/how to invoke it — flag a vague name or a docstring
   that omits a parameter format an LLM would otherwise have to guess (e.g.
@@ -169,8 +181,8 @@ collaborations count as an external-sharing finding.
 ## 7. Test conventions
 
 - HTTP-level mocking goes through `respx` (`tests/conftest.py`'s
-  `make_router()`, `TOKEN_URL`, `EVENTS_URL`) — a new test that hand-mocks
-  `httpx` instead is inconsistent with the existing suite.
+  `make_router()`, `TOKEN_URL`, `EVENTS_URL`, `USERS_URL`) — a new test that
+  hand-mocks `httpx` instead is inconsistent with the existing suite.
 - Tests call tools through the `_call()` helper (`getattr(tool, "fn",
   tool)`), not the decorated function directly — see `CLAUDE.md`.
 - A new tool or probe needs a test covering both a normal response and a

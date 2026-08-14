@@ -10,9 +10,10 @@ future tool that does must be skipped by name, and the test suite enforces
 that.
 
 **No enterprise-specific values in this file.** This repository is public, so a
-probe may not name a real account, folder, domain or item. The only literal
-identifier used is folder id ``"0"`` — Box's root folder, which is the same in
-every enterprise and identifies none.
+probe may not name a real account, folder, domain or item. Two literals identify
+nothing and are therefore allowed: folder id ``"0"`` — Box's root folder, the
+same in every enterprise — and ``ABSENT_LOGIN``, a made-up term no account can
+hold, which is what the per-user lookup is probed with.
 
 **Bounded.** These tools page through the event stream and walk the folder
 tree; their defaults (5000 events, 150 folders) are sized for a human asking
@@ -44,6 +45,18 @@ SCAN_BOUNDS: dict[str, Any] = {"root_folder_id": ROOT_FOLDER, "max_folders": 25,
 #: The scanners always report how far they got, so a probe can assert the
 #: accounting without requiring the enterprise to be misconfigured.
 SCAN_KEYS = ("folders_scanned", "capped", "fetch_errors")
+
+#: A login that no account can hold, used to exercise the per-user lookup without
+#: naming anybody: it exercises the exact-match filter and the not-found path,
+#: which is where a fuzzy hit would otherwise be reported as an answer.
+#:
+#: Email-SHAPED on purpose. ``get_user`` refuses a term that is not, before the
+#: term ever reaches Box, so a bare word would make this probe assert the
+#: not-found shape against a validation error and fail on every live run. The
+#: domain is reserved by RFC 2606, so no enterprise can hold this login — which
+#: is also what keeps it clear of the test that scans this file for address
+#: literals.
+ABSENT_LOGIN = "boxadm-mcp-smoke-probe-no-such-account@example.invalid"
 
 #: A scan swallows a per-folder API failure into ``fetch_errors`` rather than
 #: raising, so a revoked scope produces an answer whose envelope is complete
@@ -103,6 +116,17 @@ PROBES: dict[str, Probe] = {
         rows_key="top_external_sharers",
         allow_empty=True,
         must_not_match=NO_FETCH_ERRORS,
+    ),
+    # -- per-account lookup --------------------------------------------------
+    # Read-only, one request, and deliberately asks about an account that cannot
+    # exist: a live enterprise cannot be probed with a real login here, and the
+    # negative answer is the assertion that matters. "found": false proves the
+    # user directory answered AND that the exact-match filter refused whatever
+    # the prefix search returned — a tool reporting the first hit would say true.
+    "get_user": Probe(
+        args={"login": ABSENT_LOGIN},
+        require_keys=("requested_login", "found", "capped", "note"),
+        must_match=(r'"found": false',),
     ),
     # -- morning patrol ------------------------------------------------------
     # The brief runs the access analytics and the exposure scan back to back,
