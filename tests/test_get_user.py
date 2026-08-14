@@ -38,9 +38,6 @@ EXACT_ENTRY = {
 }
 NAME_HIT = {"type": "user", "id": "1002", "name": "Taro Other", "login": "hanako@example.com", "status": "active"}
 PREFIX_HIT = {"type": "user", "id": "1003", "name": "Taro Prefix", "login": "taro2@example.com", "status": "active"}
-#: The one hit worth naming: the SAME local part at another domain, i.e. the alias /
-#: duplicate an IdP-mastered estate produces. This is the only near-miss class reported.
-ALIAS_HIT = {"type": "user", "id": "1004", "name": "Taro Example", "login": "taro@alt.example.com", "status": "active"}
 
 
 def _users_router(body, *, status=200):
@@ -75,7 +72,7 @@ def test_get_user_reports_not_found_instead_of_a_fuzzy_hit():
 
     The search still returns rows (they share the prefix), so "the response was
     non-empty" must not be read as "found": ``found`` is false, ``user`` is null,
-    and the hits are quarantined under ``near_misses``.
+    and the hits are only counted.
     """
     r, _ = _users_router(_page([NAME_HIT, PREFIX_HIT]))
     with r:
@@ -83,49 +80,25 @@ def test_get_user_reports_not_found_instead_of_a_fuzzy_hit():
     assert out["found"] is False
     assert out["user"] is None
     assert "No account carries this exact login" in out["note"]
-    assert out["near_misses"] == []  # different local parts: counted, never named
     assert out["other_prefix_hits"] == 2
 
 
-def test_get_user_near_misses_carry_identity_only():
-    """Guards against a near miss being usable as an answer.
+def test_get_user_never_identifies_a_non_exact_hit():
+    """Guards the enumeration hole this tool's first draft shipped with.
 
-    A near miss with ``status`` on it invites exactly the mistake the split
-    exists to prevent, so the trim to id/name/login is part of the contract.
+    ``filter_term`` prefix-matches display name AND login, so unrelated colleagues
+    land in the result set. Identifying them returned a page of the enterprise user
+    directory (a one-character login produced 100 real accounts) while the docs said
+    enumeration was impossible. Non-exact hits are counted and never named.
     """
-    r, _ = _users_router(_page([ALIAS_HIT]))
+    r, _ = _users_router(_page([NAME_HIT, PREFIX_HIT]))
     with r:
         out = _call(server.get_user)(login=ASKED_FOR)
-    assert out["near_misses"] == [{"id": "1004", "name": "Taro Example", "login": "taro@alt.example.com"}]
-
-
-def test_get_user_names_only_same_local_part_hits_and_counts_the_rest():
-    """Guards the enumeration hole: identifying every prefix hit dumps the directory.
-
-    ``filter_term`` prefix-matches display name AND login, so an unrelated colleague
-    lands in the result set. Naming those turned the tool into a page of the enterprise
-    user directory (a one-character term returned 100 real accounts). Only the same
-    local part at another domain -- the alias / duplicate signal -- may be identified;
-    everyone else is counted and never named.
-    """
-    r, _ = _users_router(_page([NAME_HIT, PREFIX_HIT, ALIAS_HIT]))
-    with r:
-        out = _call(server.get_user)(login=ASKED_FOR)
-    assert [n["login"] for n in out["near_misses"]] == ["taro@alt.example.com"]
+    assert out["found"] is False
     assert out["other_prefix_hits"] == 2
     blob = json.dumps(out, ensure_ascii=False)
-    for stranger in ("hanako@example.com", "taro2@example.com", "Taro Other", "Taro Prefix"):
+    for stranger in ("hanako@example.com", "taro2@example.com", "Taro Other", "Taro Prefix", "1002", "1003"):
         assert stranger not in blob
-
-
-def test_get_user_caps_the_number_of_named_near_misses():
-    """Guards against a shared local part being a way to enumerate a large estate."""
-    many = [{"type": "user", "id": f"20{i:02d}", "name": f"Taro {i}", "login": f"taro@d{i}.example.com"} for i in range(server._MAX_NEAR_MISSES + 3)]
-    r, _ = _users_router(_page(many))
-    with r:
-        out = _call(server.get_user)(login=ASKED_FOR)
-    assert len(out["near_misses"]) == server._MAX_NEAR_MISSES
-    assert out["other_prefix_hits"] == 3
 
 
 @pytest.mark.parametrize("bad", ["a", "Taro", "taro", "  taro  ", "@", "taro@"])

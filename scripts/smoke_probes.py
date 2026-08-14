@@ -51,7 +51,11 @@ SCAN_KEYS = ("folders_scanned", "capped", "fetch_errors")
 #: login literal (a test scans it), and a term Box can only fail to match is also
 #: the more useful probe — it exercises the exact-match filter and the not-found
 #: path, which is where a fuzzy hit would otherwise be reported as an answer.
-ABSENT_LOGIN = "boxadm-mcp-smoke-probe-no-such-account"
+# Email-SHAPED on purpose: get_user refuses a term that is not, before it ever
+# reaches Box, so a bare word would make this probe assert the not-found shape
+# against a validation error and fail on every run. The domain is reserved by
+# RFC 2606, so no enterprise can hold this login.
+ABSENT_LOGIN = "boxadm-mcp-smoke-probe-no-such-account@example.invalid"
 
 #: A scan swallows a per-folder API failure into ``fetch_errors`` rather than
 #: raising, so a revoked scope produces an answer whose envelope is complete
@@ -122,8 +126,6 @@ PROBES: dict[str, Probe] = {
         args={"login": ABSENT_LOGIN},
         require_keys=("requested_login", "found", "capped", "note"),
         must_match=(r'"found": false',),
-        rows_key="near_misses",
-        allow_empty=True,
     ),
     # -- morning patrol ------------------------------------------------------
     # The brief runs the access analytics and the exposure scan back to back,

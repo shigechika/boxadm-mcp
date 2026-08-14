@@ -27,6 +27,13 @@ from smoke_harness import Probe  # noqa: E402
 #: time (12:34:56) and a Python slice (a[::2]) do not read as addresses, and
 #: loopback/unspecified forms (::1, ::) are not matched at all — they identify
 #: no site.
+#: Names RFC 2606 / RFC 6761 reserve so they can never belong to anyone. A literal
+#: under one of these cannot identify this (or any) enterprise, which is the only
+#: thing the checks below exist to keep out of a public repository — so they are
+#: exempt, by name. Nothing else is: the exemption is a short closed list, not a
+#: pattern, precisely so it cannot quietly grow to cover a real domain.
+RESERVED_DOMAINS = ("example.invalid", "example.com", "example.net", "example.org", "example.test")
+
 ADDRESS_SHAPES = {
     "email address": r"[\w.+-]+@[\w-]+\.[\w.]+",
     "URL": r"https?://",
@@ -238,7 +245,23 @@ def test_no_enterprise_specific_literals_in_specs():
     exists to prevent.
     """
     source = (Path(__file__).resolve().parent.parent / "scripts" / "smoke_probes.py").read_text(encoding="utf-8")
-    hits = [label for label, pattern in ADDRESS_SHAPES.items() if re.search(pattern, source)]
+    hits = {}
+    for label, pattern in ADDRESS_SHAPES.items():
+        found = [m for m in re.findall(pattern, source) if not m.endswith(RESERVED_DOMAINS)]
+        if found:
+            hits[label] = sorted(set(found))
     assert not hits, (
         f"address-like literals in smoke_probes.py: {hits}. Discover such arguments at run time (args_factory) rather than hardcoding them."
     )
+
+
+def test_reserved_domain_exemption_covers_only_reserved_names():
+    """Guards the exemption itself from growing to cover a real domain.
+
+    The check above stops rejecting a literal once it ends in a RESERVED_DOMAINS
+    entry, so that list is the one place where adding a line would silently let a
+    real address into a public repository. Every entry must be a name the RFCs
+    reserve, i.e. under .invalid/.test or the example.* second-level names.
+    """
+    for name in RESERVED_DOMAINS:
+        assert name.endswith((".invalid", ".test")) or name.startswith("example."), name

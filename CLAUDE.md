@@ -101,11 +101,10 @@ whole design:
 - **`filter_term` is a prefix search over display name AND login**, so it
   returns zero, one or several accounts and a display-name hit is somebody
   else. The tool filters to an exact, case-insensitive `login` match; anything
-  else is split: a same-local-part-different-domain hit (the alias / duplicate
-  signal) goes to `near_misses` trimmed to id/name/login and capped, and every
-  other prefix hit is only counted in `other_prefix_hits`. A term that is not
-  email-shaped is refused before the request — identifying every prefix hit had
-  made a one-character term return a page of the directory. There is a `note` saying
+  else is only counted, in `other_prefix_hits`. A term that is not email-shaped
+  is refused before the request — identifying every prefix hit had made a
+  one-character term return a page of the directory. Note the endpoint cannot
+  find an alias at another domain: it prefix-matches the whole term. There is a `note` saying
   those are not the requested account. `found: false` is a first-class answer,
   never an `{"error": ...}` — a confident wrong account is worse than a clean
   not-found, and the smoke probe asserts exactly that path.

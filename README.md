@@ -165,19 +165,20 @@ and case-insensitively**. That matching is the point, not an implementation
 detail: Box's underlying `filter_term` is a **prefix search over display name
 and login**, so the endpoint readily returns a colleague whose name starts with
 the same letters. Only an exact login match lands in `user`; everything else is
-quarantined: an account with the SAME local part at another domain is named under
-`near_misses` (id / name / login only) because that is the alias / duplicate signal
-worth acting on; every other prefix hit is counted in `other_prefix_hits` and never
-identified. A term that is not email-shaped is refused before the request is made —
-`filter_term` has no minimum length, so a one-character term would otherwise return a
-page of real accounts.
+counted in `other_prefix_hits` and never identified. A term that is not email-shaped is
+refused before the request is made — `filter_term` has no minimum length, so a
+one-character term would otherwise return a page of real accounts.
+
+One drift it cannot find: the same person under a second login at another domain.
+`filter_term` prefix-matches the whole term, so `alice@old.example` can never return
+`alice@new.example`; that would need a search on the local part alone, which is the
+directory-wide prefix search this tool refuses by design.
 
 | Field | Meaning |
 |---|---|
 | `found` | The only field that says whether the account exists. `false` is a normal answer, not an error |
 | `user` | The account when `found`, else `null`: `status`, `role`, `enterprise`, `space_used` / `space_amount`, `created_at`, `modified_at` |
-| `near_misses` | Accounts with the **same local part at a different domain** — an alias or duplicate, never the one asked about. Capped |
-| `other_prefix_hits` | Count of further prefix matches (different people). A count only: they are deliberately not identified |
+| `other_prefix_hits` | Count of further prefix matches. A count only: those are different accounts and are deliberately not identified |
 | `capped` | The search was truncated, so `found: false` is inconclusive rather than negative |
 | `search_hits`, `note` | How many entries came back, and a plain-language reading |
 
