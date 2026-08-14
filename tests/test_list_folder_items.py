@@ -301,3 +301,62 @@ def test_the_root_folder_convention_is_documented():
     and every guess (a name, a URL) is refused."""
     doc = _call(server.list_folder_items).__doc__
     assert '"0"' in doc and "root" in doc
+
+
+def test_an_offset_less_timestamp_does_not_abort_the_listing():
+    """Python refuses to order naive against aware datetimes.
+
+    One such row would have raised `TypeError: can't compare offset-naive and
+    offset-aware datetimes` out of the sort -- killing the whole listing, with no
+    filters involved, and escaping as a traceback rather than the error dict this
+    tool documents. It is treated as having no usable time and sorts last.
+    """
+    r, _ = _router(
+        [
+            _upload("naive", "a@example.com", "2026-08-20T00:00:00"),  # no offset
+            _upload("aware", "a@example.com", "2026-08-01T00:00:00+00:00"),
+        ]
+    )
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER)
+    assert out["returned"] == 2
+    assert [i["item_id"] for i in out["items"]] == ["aware", "naive"]
+
+
+def test_a_full_page_is_capped_even_when_total_count_agrees():
+    """The page-boundary net must not be unreachable.
+
+    Trusting `total_count` alone meant a folder of exactly one page reported
+    `capped: false` and "read in full" — the confident negative this design
+    avoids everywhere else. A full page cannot be told from a truncated one
+    without asking again, so it discloses.
+    """
+    entries = [_upload(str(i), "a@example.com", "2026-08-01T00:00:00+00:00") for i in range(1000)]
+    r, _ = _router(entries, total=1000)
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER, uploaded_by="nobody@example.com", limit=5)
+    assert out["capped"] is True
+    assert "inconclusive" in out["note"]
+
+
+def test_a_missing_total_count_does_not_leak_none_into_the_note():
+    """The note is prose an operator reads: "the folder holds None" is not a fact."""
+    r = respx.mock(assert_all_called=False)
+    r.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "t", "expires_in": 3600}))
+    r.get(FOLDER_URL).mock(return_value=httpx.Response(200, json={"type": "folder", "id": FOLDER, "name": "f"}))
+    entries = [_upload(str(i), "a@example.com", "2026-08-01T00:00:00+00:00") for i in range(1000)]
+    r.get(ITEMS_URL).mock(return_value=httpx.Response(200, json={"entries": entries}))  # no total_count
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER, limit=1)
+    assert out["capped"] is True
+    assert "None" not in out["note"]
+
+
+def test_a_limit_below_one_is_refused_not_clamped():
+    """`limit=0` produced "1 of 1 item(s) matched. Showing the 0 newest" — a
+    contradiction, and not something a caller can have meant."""
+    r, items = _router([_upload("1", "a@example.com", "2026-08-01T00:00:00+00:00")])
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER, limit=0)
+        assert items.call_count == 0  # refused before the request, like since/until
+    assert "error" in out and "at least 1" in out["error"]

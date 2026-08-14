@@ -1203,8 +1203,11 @@ _LINKABLE_TYPES = ("file", "folder", "web_link")
 _ITEM_PAGE = 1000
 
 
-def _parse_ts(value: str | None):
-    """Parse a Box/ISO-8601 timestamp to an aware datetime, or None.
+def _parse_iso(value: str | None):
+    """Parse an ISO-8601 timestamp, aware OR naive, or None if unparseable.
+
+    Kept separate from ``_instant`` because ``_bound`` has to tell "not a
+    timestamp" apart from "a timestamp with no offset" to say which is wrong.
 
     Comparing these as STRINGS is wrong and quietly so. Box stamps items in its
     own zone (``-07:00`` on the folder this was built for) while a caller asks in
@@ -1224,6 +1227,20 @@ def _parse_ts(value: str | None):
         return None
 
 
+def _instant(value: str | None):
+    """Parse to an AWARE datetime, or None — the form that is safe to compare.
+
+    An offset-less timestamp is treated as unparseable rather than assumed to be
+    UTC. Python refuses to order naive against aware (``TypeError: can't compare
+    offset-naive and offset-aware datetimes``), so one such row would otherwise
+    abort the whole listing — and it would escape as a traceback rather than as
+    the error dict this tool documents. Assuming a zone instead would reproduce,
+    silently, the timezone error the bounds go out of their way to refuse.
+    """
+    parsed = _parse_iso(value)
+    return parsed if parsed is not None and parsed.tzinfo is not None else None
+
+
 def _bound(value: str, *, name: str):
     """Parse a caller's ``since``/``until`` bound: ``(dt|None, error|None)``.
 
@@ -1234,7 +1251,7 @@ def _bound(value: str, *, name: str):
     """
     if not value.strip():
         return None, None
-    parsed = _parse_ts(value)
+    parsed = _parse_iso(value)
     if parsed is None:
         return None, {"error": f"{name} is not an ISO 8601 timestamp: {value!r}"}
     if parsed.tzinfo is None:
@@ -1339,6 +1356,11 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     fid, bad = _checked_root(folder_id)
     if bad:
         return bad
+    if limit < 1:
+        # Refused rather than clamped, like since/until: limit=0 produced
+        # "1 of 1 item(s) matched. Showing the 0 newest", which reads as a
+        # contradiction and cannot be what the caller wanted.
+        return {"error": f"limit must be at least 1 (got {limit})"}
     lower, err_lo = _bound(since, name="since")
     if err_lo:
         return err_lo
@@ -1361,7 +1383,13 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
 
     entries = resp.get("entries") or []
     total = resp.get("total_count")
-    capped = total > len(entries) if isinstance(total, int) else len(entries) >= _ITEM_PAGE
+    # Both conditions, not one or the other: trusting total_count alone makes the
+    # page-boundary net unreachable whenever Box sends any int, so a folder of
+    # exactly _ITEM_PAGE items reports "read in full" and turns a miss into a
+    # confident negative. A folder of exactly that size now reports capped=True
+    # instead -- the honest trade, since a full page cannot be told from a
+    # truncated one without asking again.
+    capped = (isinstance(total, int) and total > len(entries)) or len(entries) >= _ITEM_PAGE
 
     rows = [_item_row(it) for it in entries]
     # casefold, not lower: this value is an opaque string that can be a display
@@ -1375,7 +1403,7 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     if lower or upper:
         keep = []
         for r in rows:
-            ts = _parse_ts(r["created_at"])
+            ts = _instant(r["created_at"])
             # An unparseable/absent created_at cannot be shown to satisfy a bound,
             # so it is dropped rather than passed through as "probably fine".
             if ts is None or (lower and ts < lower) or (upper and ts > upper):
@@ -1388,15 +1416,16 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     # matched neither created_at nor modified_at order -- so it cannot honestly be
     # presented as "newest". Sorting on the parsed instant also survives Box
     # returning a different UTC offset.
-    rows.sort(key=lambda r: _parse_ts(r["created_at"]) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    rows.sort(key=lambda r: _instant(r["created_at"]) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
 
     matched = len(rows)
-    rows = rows[: max(0, limit)]
+    rows = rows[:limit]
 
     if capped:
+        held = f"the folder holds {total}" if isinstance(total, int) else "the folder holds more"
         note = (
-            f"{matched} item(s) matched among the {len(entries)} fetched, but the folder holds "
-            f"{total} — filters were applied to part of it, so an absent item is inconclusive."
+            f"{matched} item(s) matched among the {len(entries)} fetched, but {held} — "
+            "filters were applied to part of it, so an absent item is inconclusive."
         )
     elif matched == 0:
         note = "No item in this folder matched. The folder was read in full, so this is a negative answer, not a partial one."
