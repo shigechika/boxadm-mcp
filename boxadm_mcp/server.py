@@ -872,7 +872,19 @@ def top_external_sharers(root_folder_id: str = "0", max_folders: int = 150, max_
 # user object (id / type / name / login) unless asked for more, and everything that
 # answers "why can this person not use Box" — status, role, quota — is in the "more".
 # All of them ride on the same GET, so the explicit list costs no extra call.
-USER_LOOKUP_FIELDS = ["id", "name", "login", "status", "role", "enterprise", "created_at", "modified_at", "space_used", "space_amount"]
+USER_LOOKUP_FIELDS = [
+    "id",
+    "name",
+    "login",
+    "status",
+    "role",
+    "enterprise",
+    "is_platform_access_only",
+    "created_at",
+    "modified_at",
+    "space_used",
+    "space_amount",
+]
 
 # One page is asked for and truncation is disclosed, rather than paging: a login
 # lookup that needs paging has stopped being a lookup. A login is unique, and Box
@@ -881,16 +893,28 @@ USER_LOOKUP_FIELDS = ["id", "name", "login", "status", "role", "enterprise", "cr
 # statement than "no such account", and only one of them is safe to act on.
 _USER_SEARCH_LIMIT = 100
 
+# A near miss is only reported when it is plausibly the SAME PERSON under a different
+# address -- same local part, different domain (alias / duplicate account). That is the
+# case worth surfacing, because the account master is the IdP and a downstream login that
+# disagrees with it is the finding. Every other prefix hit is a different person and is
+# counted, never identified: returning them would turn a lookup into a directory dump
+# (a one-character login would have returned a full page of real accounts).
+_MAX_NEAR_MISSES = 5
+
 _NOT_FOUND_NOTE = (
-    "No account carries this exact login. Box's filter_term is a prefix search over display name AND login, "
-    "so an entry in near_misses is a DIFFERENT account, never the one asked about. The login may not exist, "
-    "may be spelled differently, or may be outside what this app's permissions can see."
+    "No account carries this exact login. The login may not exist, may be spelled differently, or may be "
+    "outside what this app's permissions can see. Anything under near_misses is a DIFFERENT account and is "
+    "never the answer; other_prefix_hits is a count of further unrelated matches, deliberately not identified."
 )
 _NOT_FOUND_CAPPED_NOTE = (
     "INCONCLUSIVE, not a negative answer: the search was truncated (capped), so an exact match may exist beyond "
     "the returned page. Do not report this as 'no such account'."
 )
-_NEAR_MISS_NOTE = " Entries in near_misses matched Box's prefix search on display name or login and are NOT the requested account."
+_NEAR_MISS_NOTE = (
+    " near_misses lists accounts with the SAME local part at a DIFFERENT domain. They are not the requested "
+    "account, but in an IdP-mastered estate they are the signature of an alias or a duplicate account -- compare "
+    "them against the identity provider's record, which is the master."
+)
 _FOUND_NOTE = "Exact, case-insensitive match on login."
 
 
@@ -912,6 +936,23 @@ def _identity_only(entry: dict) -> dict:
     ("did you mean this person?") and nothing that reads like a status answer.
     """
     return {"id": entry.get("id"), "name": entry.get("name"), "login": entry.get("login")}
+
+
+def _local_part(login: str) -> str:
+    """Local part of a login, folded for comparison. Empty when there is no ``@``."""
+    local, sep, _domain = (login or "").strip().lower().partition("@")
+    return local if sep else ""
+
+
+def _is_same_local_part(entry: dict, wanted_local: str) -> bool:
+    """True when this hit is the same local part at a different domain.
+
+    ``alice@example.edu`` vs ``alice@students.example.edu`` is the alias / duplicate
+    case an IdP-mastered estate actually produces, and it is what makes a near miss
+    diagnostic rather than noise. A hit that merely shares a name prefix is a different
+    person and must not be reported.
+    """
+    return bool(wanted_local) and _local_part(entry.get("login") or "") == wanted_local
 
 
 def _user_lookup_hint(message: str) -> str | None:
@@ -949,16 +990,35 @@ def get_user(login: str) -> dict:
             (``someone@example.com``) — not a display name, not a user id. Matched
             EXACTLY, case-insensitively. A partial login does not match.
 
-    Returns (same keys every time):
+    This server is downstream of an identity provider, not the master. Read what comes
+    back as "what Box currently believes", and compare it against the IdP's own record
+    (which is authoritative for who the account is). A disagreement is the finding, and
+    is usually drift on the Box side rather than a mistyped address:
+
+    - ``enterprise`` absent/null — the account is no longer in the enterprise (it has
+      become a free personal account), so enterprise SSO no longer applies to it even
+      though the IdP still authenticates the person.
+    - ``status`` other than ``active`` — the IdP authenticates, Box refuses.
+    - ``is_platform_access_only`` true — an App User, which cannot sign in interactively
+      at all.
+    - a ``near_misses`` entry — the same local part at another domain, i.e. an alias or
+      a duplicate account. Check which one the IdP actually asserts.
+
+    Returns two shapes, distinguished by whether the lookup completed.
+
+    On a completed lookup:
     - ``requested_login`` — what was asked for, echoed back.
     - ``found`` — bool. **The only field that says whether the account was found.**
     - ``user`` — the account when ``found`` is true, else ``null``: id, name, login,
       ``status`` (``active`` / ``inactive`` / …, the usual answer to "why can't I sign
       in"), ``role``, ``enterprise``, ``space_used`` / ``space_amount`` (quota
       exhaustion is another recurring cause), ``created_at``, ``modified_at``.
-    - ``near_misses`` — identity only (id / name / login) of OTHER accounts the search
-      turned up. **These are not the requested account** and must never be reported as
-      if they were; they exist so a misspelled login can be recognised as such.
+    - ``near_misses`` — identity only (id / name / login), and only for accounts with the
+      SAME local part at a DIFFERENT domain. **These are not the requested account** and
+      must never be reported as if they were; they are the alias / duplicate signal
+      described above. Capped, and never a way to browse the directory.
+    - ``other_prefix_hits`` — how many further accounts the prefix search matched. A
+      COUNT ONLY: those are different people and are deliberately not identified.
     - ``search_hits`` — how many entries the search returned.
     - ``capped`` — true when the search result was truncated, so ``found: false`` is
       inconclusive rather than negative (``note`` says so).
@@ -966,12 +1026,16 @@ def get_user(login: str) -> dict:
 
     Why the filtering matters: Box's ``filter_term`` is a **prefix search over display
     name AND login**, not a lookup, so it happily returns somebody else — a colleague
-    whose display name starts with the same letters. Those hits are separated into
-    ``near_misses``; ``user`` is only ever an exact login match.
+    whose display name starts with the same letters. ``user`` is therefore only ever an
+    exact login match, only same-local-part hits are identified at all, and a term that
+    is not email-shaped is refused before the request is made (a one-character term
+    would otherwise return a page of real accounts).
 
-    On failure returns ``{"error": ...}`` (missing env / ``needs-login`` for an expired
+    On failure the other shape is returned: ``{"error": ...}`` (missing env / ``needs-login`` for an expired
     OAuth session / a Box API error), plus ``likely_cause`` when the failure was a
-    permission one. Auth caveat, stated honestly: this server supports two auth modes,
+    permission one. **``found`` is absent from that shape on purpose** — a failed lookup
+    is not a negative answer, and must never be read as "no such account". Auth caveat,
+    stated honestly: this server supports two auth modes,
     and under ``oauth`` the effective permission is the authorising user's. Whether
     ``/2.0/users`` is reachable **has not been verified end-to-end** in either mode, and
     no scope requirement is claimed here that was not confirmed — a permission failure
@@ -984,6 +1048,19 @@ def get_user(login: str) -> dict:
         # the enterprise directory, which is the enumeration this tool exists to avoid.
         # Refused before any API call.
         return {"error": "login is required: pass the account's exact Box login (an email address)"}
+
+    wanted_local = _local_part(needle)
+    if not wanted_local or "@" not in needle.rstrip("@"):
+        # filter_term is a PREFIX search over display name AND login, so a short or
+        # name-shaped term matches strangers: "a" returns a page of real accounts. A
+        # login is an email address, and requiring that shape is what keeps this a
+        # lookup. Refused before any API call -- the request itself is the leak.
+        return {
+            "error": (
+                "login must be a full Box login (an email address). A display name or a "
+                "partial string is a prefix search over the whole directory, not a lookup"
+            )
+        }
 
     client, err = _connect()
     if err:
@@ -1004,7 +1081,10 @@ def get_user(login: str) -> dict:
     entries = resp.get("entries") or []
     wanted = needle.lower()
     exact = [e for e in entries if _login_is(e, wanted)]
-    near_misses = [_identity_only(e) for e in entries if not _login_is(e, wanted)]
+    others = [e for e in entries if not _login_is(e, wanted)]
+    # Only same-local-part hits are identified; the rest are counted. See _MAX_NEAR_MISSES.
+    near_misses = [_identity_only(e) for e in others if _is_same_local_part(e, wanted_local)][:_MAX_NEAR_MISSES]
+    other_prefix_hits = len(others) - len(near_misses)
 
     # Truncation disclosure, same contract as the scan tools' `capped`: a "not found"
     # computed over a partial result is not a negative answer. total_count is Box's own
@@ -1024,6 +1104,9 @@ def get_user(login: str) -> dict:
         "found": bool(exact),
         "user": exact[0] if exact else None,
         "near_misses": near_misses,
+        # Count only, never identities: these are other people who merely share a name or
+        # login prefix. Reported so a caller knows the search was not empty.
+        "other_prefix_hits": other_prefix_hits,
         "search_hits": len(entries),
         "capped": capped,
         "note": note,

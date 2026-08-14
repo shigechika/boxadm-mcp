@@ -125,7 +125,7 @@ and be safely committed.
 - Enumeration tools share a short-TTL scan memo across calls;
   `public_shared_links` skips collaboration calls entirely (optimization).
 - **`get_user`** reads the enterprise **user directory** instead — one request,
-  no paging, no enumeration (it answers about the login you pass and nothing
+  no paging, and structurally not an enumerator (it answers about the login you pass and nothing
   else). Its `capped` flag discloses a truncated search, so a `found: false`
   from a truncated result reads as inconclusive rather than negative.
 
@@ -165,13 +165,19 @@ and case-insensitively**. That matching is the point, not an implementation
 detail: Box's underlying `filter_term` is a **prefix search over display name
 and login**, so the endpoint readily returns a colleague whose name starts with
 the same letters. Only an exact login match lands in `user`; everything else is
-quarantined under `near_misses` (id / name / login only) with a `note` saying so.
+quarantined: an account with the SAME local part at another domain is named under
+`near_misses` (id / name / login only) because that is the alias / duplicate signal
+worth acting on; every other prefix hit is counted in `other_prefix_hits` and never
+identified. A term that is not email-shaped is refused before the request is made —
+`filter_term` has no minimum length, so a one-character term would otherwise return a
+page of real accounts.
 
 | Field | Meaning |
 |---|---|
 | `found` | The only field that says whether the account exists. `false` is a normal answer, not an error |
 | `user` | The account when `found`, else `null`: `status`, `role`, `enterprise`, `space_used` / `space_amount`, `created_at`, `modified_at` |
-| `near_misses` | **Other** accounts the prefix search returned — never the one asked about |
+| `near_misses` | Accounts with the **same local part at a different domain** — an alias or duplicate, never the one asked about. Capped |
+| `other_prefix_hits` | Count of further prefix matches (different people). A count only: they are deliberately not identified |
 | `capped` | The search was truncated, so `found: false` is inconclusive rather than negative |
 | `search_hits`, `note` | How many entries came back, and a plain-language reading |
 

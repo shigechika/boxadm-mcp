@@ -38,6 +38,9 @@ EXACT_ENTRY = {
 }
 NAME_HIT = {"type": "user", "id": "1002", "name": "Taro Other", "login": "hanako@example.com", "status": "active"}
 PREFIX_HIT = {"type": "user", "id": "1003", "name": "Taro Prefix", "login": "taro2@example.com", "status": "active"}
+#: The one hit worth naming: the SAME local part at another domain, i.e. the alias /
+#: duplicate an IdP-mastered estate produces. This is the only near-miss class reported.
+ALIAS_HIT = {"type": "user", "id": "1004", "name": "Taro Example", "login": "taro@alt.example.com", "status": "active"}
 
 
 def _users_router(body, *, status=200):
@@ -65,7 +68,6 @@ def test_get_user_returns_the_exact_login_not_the_first_hit():
     assert out["found"] is True
     assert out["user"]["login"] == ASKED_FOR
     assert out["user"]["status"] == "inactive"  # the answer the ticket needs
-    assert {n["login"] for n in out["near_misses"]} == {"hanako@example.com", "taro2@example.com"}
 
 
 def test_get_user_reports_not_found_instead_of_a_fuzzy_hit():
@@ -80,8 +82,9 @@ def test_get_user_reports_not_found_instead_of_a_fuzzy_hit():
         out = _call(server.get_user)(login=ASKED_FOR)
     assert out["found"] is False
     assert out["user"] is None
-    assert len(out["near_misses"]) == 2
-    assert "NOT the requested account" in out["note"]
+    assert "No account carries this exact login" in out["note"]
+    assert out["near_misses"] == []  # different local parts: counted, never named
+    assert out["other_prefix_hits"] == 2
 
 
 def test_get_user_near_misses_carry_identity_only():
@@ -90,10 +93,55 @@ def test_get_user_near_misses_carry_identity_only():
     A near miss with ``status`` on it invites exactly the mistake the split
     exists to prevent, so the trim to id/name/login is part of the contract.
     """
-    r, _ = _users_router(_page([NAME_HIT]))
+    r, _ = _users_router(_page([ALIAS_HIT]))
     with r:
         out = _call(server.get_user)(login=ASKED_FOR)
-    assert out["near_misses"] == [{"id": "1002", "name": "Taro Other", "login": "hanako@example.com"}]
+    assert out["near_misses"] == [{"id": "1004", "name": "Taro Example", "login": "taro@alt.example.com"}]
+
+
+def test_get_user_names_only_same_local_part_hits_and_counts_the_rest():
+    """Guards the enumeration hole: identifying every prefix hit dumps the directory.
+
+    ``filter_term`` prefix-matches display name AND login, so an unrelated colleague
+    lands in the result set. Naming those turned the tool into a page of the enterprise
+    user directory (a one-character term returned 100 real accounts). Only the same
+    local part at another domain -- the alias / duplicate signal -- may be identified;
+    everyone else is counted and never named.
+    """
+    r, _ = _users_router(_page([NAME_HIT, PREFIX_HIT, ALIAS_HIT]))
+    with r:
+        out = _call(server.get_user)(login=ASKED_FOR)
+    assert [n["login"] for n in out["near_misses"]] == ["taro@alt.example.com"]
+    assert out["other_prefix_hits"] == 2
+    blob = json.dumps(out, ensure_ascii=False)
+    for stranger in ("hanako@example.com", "taro2@example.com", "Taro Other", "Taro Prefix"):
+        assert stranger not in blob
+
+
+def test_get_user_caps_the_number_of_named_near_misses():
+    """Guards against a shared local part being a way to enumerate a large estate."""
+    many = [{"type": "user", "id": f"20{i:02d}", "name": f"Taro {i}", "login": f"taro@d{i}.example.com"} for i in range(server._MAX_NEAR_MISSES + 3)]
+    r, _ = _users_router(_page(many))
+    with r:
+        out = _call(server.get_user)(login=ASKED_FOR)
+    assert len(out["near_misses"]) == server._MAX_NEAR_MISSES
+    assert out["other_prefix_hits"] == 3
+
+
+@pytest.mark.parametrize("bad", ["a", "Taro", "taro", "  taro  ", "@", "taro@"])
+def test_get_user_refuses_a_term_that_is_not_a_login(bad):
+    """Guards the same hole at the input: the request itself is the leak.
+
+    Box has no minimum length for ``filter_term``, so a display name or a single
+    character is a prefix search over the whole directory. Refusing before the call
+    means the strangers' records are never fetched at all.
+    """
+    r, route = _users_router(_page([]))
+    with r:
+        out = _call(server.get_user)(login=bad)
+    assert "error" in out
+    assert "found" not in out
+    assert not route.called  # never reached Box
 
 
 @pytest.mark.parametrize(
