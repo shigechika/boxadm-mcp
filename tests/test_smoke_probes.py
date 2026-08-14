@@ -46,8 +46,14 @@ ADDRESS_SHAPES = {
 #: like one.
 #:
 #: ``root_folder_id`` is deliberately absent. Box numbers the root folder "0" in
-#: every enterprise, so naming it identifies none, and the probes use nothing
-#: else.
+#: every enterprise, so naming it identifies none.
+#:
+#: ``get_user``'s ``login`` is deliberately absent too, for a different reason:
+#: its probe passes a made-up term no account can hold, precisely so the
+#: not-found path — where a fuzzy hit would otherwise be reported as an answer —
+#: is the one exercised. Banning the key would force that probe to discover a
+#: real login instead, which is the opposite of what this file is protecting.
+#: The address-shape scan below still refuses any real login written here.
 IDENTIFIER_ARGS = {"created_by_logins"}
 
 #: Parameters that bound how much work a tool does. A scheduled probe must pass

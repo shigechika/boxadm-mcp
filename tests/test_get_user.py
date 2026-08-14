@@ -204,6 +204,21 @@ def test_get_user_missing_env_returns_error(monkeypatch):
     assert "BOX_CLIENT_ID" in out["error"]
 
 
+def test_get_user_expired_oauth_session_surfaces_needs_login(monkeypatch, tmp_path):
+    """Guards the fleet-wide convention that an expired OAuth session says so.
+
+    Without the token cache the lookup cannot run, and the actionable answer is
+    "run boxadm-mcp auth" — not a Box error, and emphatically not ``found: false``,
+    which would report a live account as missing because nobody was logged in.
+    """
+    monkeypatch.setenv("BOX_AUTH_MODE", "oauth")
+    monkeypatch.setenv("BOX_TOKEN_CACHE", str(tmp_path / "absent.json"))
+    out = _call(server.get_user)(login=ASKED_FOR)  # no router: must not reach the network
+    assert out["error"].startswith("needs-login:")
+    assert "boxadm-mcp auth" in out["error"]
+    assert "found" not in out  # never a statement about the account
+
+
 def test_get_user_works_in_oauth_mode(monkeypatch, tmp_path):
     """Guards the one-method-serves-both-clients arrangement.
 
