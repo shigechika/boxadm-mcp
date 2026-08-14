@@ -234,6 +234,18 @@ def test_no_account_identifying_arguments_are_hardcoded():
     )
 
 
+def _is_reserved(literal: str) -> bool:
+    """True when ``literal`` sits in a name the RFCs reserve for documentation.
+
+    Matched on a label boundary, not as a bare suffix: ``endswith("example.com")``
+    also accepts ``corp-example.com``, which is a perfectly real domain — so the
+    exemption meant for documentation names would have waved a live enterprise
+    address straight past the guard below.
+    """
+    host = literal.rsplit("@", 1)[-1].rstrip("/").lower()
+    return any(host == d or host.endswith("." + d) for d in RESERVED_DOMAINS)
+
+
 def test_no_enterprise_specific_literals_in_specs():
     """This repository is public: probes must not name the enterprise.
 
@@ -247,12 +259,25 @@ def test_no_enterprise_specific_literals_in_specs():
     source = (Path(__file__).resolve().parent.parent / "scripts" / "smoke_probes.py").read_text(encoding="utf-8")
     hits = {}
     for label, pattern in ADDRESS_SHAPES.items():
-        found = [m for m in re.findall(pattern, source) if not m.endswith(RESERVED_DOMAINS)]
+        found = [m for m in re.findall(pattern, source) if not _is_reserved(m)]
         if found:
             hits[label] = sorted(set(found))
     assert not hits, (
         f"address-like literals in smoke_probes.py: {hits}. Discover such arguments at run time (args_factory) rather than hardcoding them."
     )
+
+
+def test_reserved_domain_exemption_matches_on_a_label_boundary():
+    """A real domain that merely ends in a reserved name must stay banned.
+
+    ``corp-example.com`` and ``notexample.invalid`` are ordinary registrable
+    domains. A suffix test accepts both, which turns the documentation-name
+    exemption into a hole big enough for a live address.
+    """
+    for reserved in ("user@example.com", "files.example.invalid", "example.test", "sub.example.org"):
+        assert _is_reserved(reserved), f"should be exempt: {reserved}"
+    for real in ("employee@corp-example.com", "notexample.invalid", "myexample.test", "example.community"):
+        assert not _is_reserved(real), f"must NOT be exempt: {real}"
 
 
 def test_reserved_domain_exemption_covers_only_reserved_names():
