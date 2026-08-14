@@ -160,7 +160,8 @@ collaborations count as an external-sharing finding.
   `created_by_logins` parsing (split on `,`, strip, drop empties) is the
   existing pattern for a delimited free-text input; a new similar parameter
   should handle empty/malformed input the same defensive way rather than
-  `get_user` is the sharper case: it refuses any `login` that is not
+  passing it straight into an API call. `get_user` is the sharper case: it
+  refuses any `login` that is not
   email-shaped **before** the request, because `filter_term` is a prefix
   search with no minimum length -- an empty term means "no filter", and a
   one-character term is just as wide, so both turn a lookup into a page of
