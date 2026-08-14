@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/shigechika/boxadm-mcp/compare/v0.7.1...v0.8.0) (2026-08-14)
+
+
+### Features
+
+* add list_folder_items, an ls for one Box folder ([#55](https://github.com/shigechika/boxadm-mcp/issues/55)) ([5cd5e84](https://github.com/shigechika/boxadm-mcp/commit/5cd5e84339015b1b713cf9e84938838c0442cef3))
+
+
+### Bug Fixes
+
+* **client:** validate folder ids before they choose the endpoint ([#53](https://github.com/shigechika/boxadm-mcp/issues/53)) ([47e688f](https://github.com/shigechika/boxadm-mcp/commit/47e688fb5bf1b9a75f877d810308125373ab0c5b))
+
 ## [0.7.1](https://github.com/shigechika/boxadm-mcp/compare/v0.7.0...v0.7.1) (2026-08-14)
 
 
