@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/shigechika/boxadm-mcp/compare/v0.6.1...v0.7.0) (2026-08-14)
+
+
+### Features
+
+* add get_user, a single-account lookup ([#48](https://github.com/shigechika/boxadm-mcp/issues/48)) ([2954ccc](https://github.com/shigechika/boxadm-mcp/commit/2954ccc5a721ccdb5c7f75001579c64e4e6925f5))
+
 ## [0.6.1](https://github.com/shigechika/boxadm-mcp/compare/v0.6.0...v0.6.1) (2026-08-11)
 
 
