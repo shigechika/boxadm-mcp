@@ -155,6 +155,13 @@ def test_get_user_requests_filter_term_and_the_explicit_field_list():
         assert params["filter_term"] == ASKED_FOR
         requested = set(params["fields"].split(","))
         assert {"status", "role", "enterprise", "space_used", "space_amount"} <= requested
+        # user_type is sent explicitly because Box does not document what omitting
+        # it means. An account that LEFT the enterprise (the tool's headline
+        # diagnostic: "enterprise absent") is an EXTERNAL user, so a narrower value
+        # would answer "no such account" about a person who plainly exists. It
+        # cannot widen the search: Box returns an external user only on a COMPLETE
+        # login match, which is already this tool's contract.
+        assert params["user_type"] == "all"
 
 
 def test_get_user_refuses_an_empty_login_without_calling_box():

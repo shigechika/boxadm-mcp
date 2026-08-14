@@ -166,8 +166,11 @@ collaborations count as an external-sharing finding.
   search with no minimum length -- an empty term means "no filter", and a
   one-character term is just as wide, so both turn a lookup into a page of
   the user directory. Rejecting only the empty form is NOT enough, and the
-  same reasoning applies on the way out: `get_user` identifies a prefix hit
-  only when it shares the requested local part, and merely counts the rest.
+  same reasoning applies on the way out: `get_user` identifies a hit only on
+  an exact login match, and merely counts every other one. Treat any change
+  that names a non-exact hit as reopening this hole -- an earlier draft
+  reported "near misses" and returned 100 real accounts from a one-character
+  term.
   Flag a new parameter reaching an API call when a *narrow-looking* value of
   it still means something wider than what was asked for.
 - A new `@mcp.tool()`'s name and docstring are what the calling model uses

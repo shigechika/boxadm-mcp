@@ -318,7 +318,14 @@ class _FolderReadMixin:
     def get_folder_collaborations(self, folder_id: str) -> dict:
         return self._get(f"/folders/{folder_id}/collaborations")
 
-    def get_users(self, *, filter_term: str, fields: list[str] | None = None, limit: int = 100) -> dict:
+    def get_users(
+        self,
+        *,
+        filter_term: str,
+        fields: list[str] | None = None,
+        limit: int = 100,
+        user_type: str = "all",
+    ) -> dict:
         """Fetch one page of enterprise users matching ``filter_term`` (raw Box response).
 
         ``filter_term`` is Box's own **prefix search** over a user's display name AND
@@ -327,13 +334,22 @@ class _FolderReadMixin:
         asked about. Callers that want one account must match the login themselves —
         see ``server.get_user``.
 
+        ``user_type`` defaults to ``all`` and is sent explicitly, because Box does not
+        document what omitting it means. That matters for exactly the account this is
+        most often asked about: one that has LEFT the enterprise and become a free
+        personal account is an *external* user, and a narrower default would drop it
+        from the response — answering "no such account" about a person who plainly
+        exists. ``all`` cannot widen the search either: Box returns an external user
+        only when the login matches the term COMPLETELY, and then only that user, so
+        the partial-prefix behaviour stays confined to managed accounts.
+
         Box returns a minimal user object (id / type / name / login) unless ``fields``
         asks for more; every extra field rides on this same GET, so there is no
         per-field call cost. The response carries ``total_count``, so a caller can tell
         a complete result from a truncated one instead of assuming the page is all
         there was.
         """
-        params: dict = {"filter_term": filter_term, "limit": limit}
+        params: dict = {"filter_term": filter_term, "limit": limit, "user_type": user_type}
         if fields:
             params["fields"] = ",".join(fields)
         return self._get("/users", params)

@@ -970,7 +970,10 @@ def get_user(login: str) -> dict:
 
     - ``enterprise`` absent/null — the account is no longer in the enterprise (it has
       become a free personal account), so enterprise SSO no longer applies to it even
-      though the IdP still authenticates the person.
+      though the IdP still authenticates the person. Box classes such an account as
+      *external* and returns it only on a COMPLETE login match, which is exactly what
+      this tool asks for — so it is reachable here, and a partial login would silently
+      lose it.
     - ``status`` other than ``active`` — the IdP authenticates, Box refuses.
     - ``is_platform_access_only`` true — an App User, which cannot sign in interactively
       at all.

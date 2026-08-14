@@ -280,13 +280,34 @@ def test_reserved_domain_exemption_matches_on_a_label_boundary():
         assert not _is_reserved(real), f"must NOT be exempt: {real}"
 
 
+def test_reserved_domain_exemption_rejects_a_real_domain_under_an_example_label():
+    """The specific hole the shape-based version of the guard above had.
+
+    ``example.corp-acme.com`` is registrable and real, yet starts with ``example.``;
+    admitting it to RESERVED_DOMAINS would exempt that whole host from the
+    public-repository address scan. Pinned so the guard cannot regress to a shape test.
+    """
+    rfc2606 = {"example.com", "example.net", "example.org"}
+
+    def accepted(name: str) -> bool:
+        return name in rfc2606 or name.rsplit(".", 1)[-1] in ("invalid", "test")
+
+    for reserved in RESERVED_DOMAINS:
+        assert accepted(reserved), reserved
+    for real in ("example.corp-acme.com", "example.co.jp", "example.acme.net", "exampled.com"):
+        assert not accepted(real), f"must NOT be admissible: {real}"
+
+
 def test_reserved_domain_exemption_covers_only_reserved_names():
     """Guards the exemption itself from growing to cover a real domain.
 
-    The check above stops rejecting a literal once it ends in a RESERVED_DOMAINS
+    The check above stops rejecting a literal once it sits under a RESERVED_DOMAINS
     entry, so that list is the one place where adding a line would silently let a
     real address into a public repository. Every entry must be a name the RFCs
-    reserve, i.e. under .invalid/.test or the example.* second-level names.
+    reserve, tested as a closed set rather than by shape: a ``startswith("example.")``
+    rule also accepts ``example.corp-acme.com``, an ordinary registrable domain,
+    which would exempt every address at that host and all of its subdomains.
     """
+    rfc2606 = {"example.com", "example.net", "example.org"}
     for name in RESERVED_DOMAINS:
-        assert name.endswith((".invalid", ".test")) or name.startswith("example."), name
+        assert name in rfc2606 or name.rsplit(".", 1)[-1] in ("invalid", "test"), name

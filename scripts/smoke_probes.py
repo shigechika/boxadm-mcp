@@ -47,14 +47,15 @@ SCAN_BOUNDS: dict[str, Any] = {"root_folder_id": ROOT_FOLDER, "max_folders": 25,
 SCAN_KEYS = ("folders_scanned", "capped", "fetch_errors")
 
 #: A login that no account can hold, used to exercise the per-user lookup without
-#: naming anybody. It is not address-shaped on purpose: this file may not carry a
-#: login literal (a test scans it), and a term Box can only fail to match is also
-#: the more useful probe — it exercises the exact-match filter and the not-found
-#: path, which is where a fuzzy hit would otherwise be reported as an answer.
-# Email-SHAPED on purpose: get_user refuses a term that is not, before it ever
-# reaches Box, so a bare word would make this probe assert the not-found shape
-# against a validation error and fail on every run. The domain is reserved by
-# RFC 2606, so no enterprise can hold this login.
+#: naming anybody: it exercises the exact-match filter and the not-found path,
+#: which is where a fuzzy hit would otherwise be reported as an answer.
+#:
+#: Email-SHAPED on purpose. ``get_user`` refuses a term that is not, before the
+#: term ever reaches Box, so a bare word would make this probe assert the
+#: not-found shape against a validation error and fail on every live run. The
+#: domain is reserved by RFC 2606, so no enterprise can hold this login — which
+#: is also what keeps it clear of the test that scans this file for address
+#: literals.
 ABSENT_LOGIN = "boxadm-mcp-smoke-probe-no-such-account@example.invalid"
 
 #: A scan swallows a per-folder API failure into ``fetch_errors`` rather than
