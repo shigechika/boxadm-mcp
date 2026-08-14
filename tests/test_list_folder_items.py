@@ -261,3 +261,43 @@ def test_the_error_shape_carries_no_counts():
     assert "error" in out
     for absent in ("items", "returned", "matched", "total_in_folder", "capped"):
         assert absent not in out
+
+
+def test_a_web_link_gets_a_direct_link_too():
+    """A folder can hold three item types and all three have a Box web path.
+
+    Verified with GET: /file/{id}, /folder/{id} and /web_link/{id} all 302 to
+    login with the right redirect_url. The underscore matters -- /weblink/{id}
+    is a 404 -- so the set is closed rather than derived from Box's `type`.
+    """
+    r, _ = _router([{"type": "web_link", "id": "55", "name": "portal", "created_at": "2026-08-01T00:00:00+00:00"}])
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER)
+    assert out["items"][0]["item_url"] == "https://app.box.com/web_link/55"
+
+
+def test_an_unknown_item_type_gets_no_guessed_link():
+    """A URL built from a type Box invents later would 404 while looking valid."""
+    r, _ = _router([{"type": "something_new", "id": "9", "name": "x", "created_at": "2026-08-01T00:00:00+00:00"}])
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER)
+    assert out["items"][0]["item_url"] is None
+
+
+def test_uploader_matching_folds_case_beyond_ascii():
+    """`lower()` does not fold every case pair.
+
+    "Straße".lower() is "straße"; a caller typing "STRASSE" lowers to "strasse",
+    so an ASCII-only fold would report a real submitter as having no attachments.
+    """
+    r, _ = _router([_upload("1", "Straße", "2026-08-01T00:00:00+00:00")])
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER, uploaded_by="STRASSE")
+    assert out["matched"] == 1
+
+
+def test_the_root_folder_convention_is_documented():
+    """R1F2: a calling model that cannot learn `"0"` means the root has to guess,
+    and every guess (a name, a URL) is refused."""
+    doc = _call(server.list_folder_items).__doc__
+    assert '"0"' in doc and "root" in doc

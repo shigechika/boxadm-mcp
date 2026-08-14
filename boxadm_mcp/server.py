@@ -1192,6 +1192,10 @@ ITEM_LIST_FIELDS = [
     "shared_link",
 ]
 
+#: Item types that have a Box web path. Closed on purpose: an unrecognised type
+#: gets ``item_url: null`` rather than a guessed URL that 404s.
+_LINKABLE_TYPES = ("file", "folder", "web_link")
+
 #: One page is fetched regardless of the caller's ``limit`` (Box's own maximum),
 #: because filtering happens after the fetch: bounding the FETCH by ``limit``
 #: would make ``uploaded_by`` search only the newest N items and miss the match
@@ -1265,7 +1269,14 @@ def _item_row(it: dict) -> dict:
         # from a file's byte count -- reporting both under one key invites a sum.
         "size_bytes": it.get("size") if itype == "file" else None,
         "shared_link_access": sl.get("access"),
-        "item_url": f"https://app.box.com/{itype}/{it.get('id')}" if itype in ("file", "folder") else None,
+        # Box's own web path happens to be the item type verbatim, for all three
+        # types a folder can hold. Verified with GET (HEAD answers 405 for the
+        # file form, which made an earlier check look like a failure):
+        # /file/{id}, /folder/{id} and /web_link/{id} all 302 to login carrying
+        # the right redirect_url, while /weblink/{id} is a 404 -- so the
+        # underscore matters and the set is closed rather than derived from
+        # whatever `type` Box sends.
+        "item_url": f"https://app.box.com/{itype}/{it.get('id')}" if itype in _LINKABLE_TYPES else None,
     }
 
 
@@ -1282,7 +1293,9 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
 
     Args:
         folder_id: The folder's Box id — decimal digits, the number at the end of
-            a Box folder URL. Anything else is refused before any request is made.
+            a Box folder URL. ``"0"`` is the caller's own root ("All Files"), the
+            same convention the enumeration tools use. Anything else — a name, a
+            label, a whole URL — is refused before any request is made.
         uploaded_by: Optional. Return only items uploaded by this person, matched
             EXACTLY and case-insensitively against ``uploaded_by`` below. Use it
             when the enquiry names its submitter.
@@ -1351,9 +1364,14 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     capped = total > len(entries) if isinstance(total, int) else len(entries) >= _ITEM_PAGE
 
     rows = [_item_row(it) for it in entries]
-    wanted = uploaded_by.strip().lower()
+    # casefold, not lower: this value is an opaque string that can be a display
+    # name, and lower() does not fold every case pair -- "Straße".lower() is
+    # "straße" while a caller typing "STRASSE" gets "strasse", so a real
+    # submitter would come back as "no attachments". (get_user matches a LOGIN
+    # with lower(); that is an address, a narrower thing than this.)
+    wanted = uploaded_by.strip().casefold()
     if wanted:
-        rows = [r for r in rows if (r["uploaded_by"] or "").strip().lower() == wanted]
+        rows = [r for r in rows if (r["uploaded_by"] or "").strip().casefold() == wanted]
     if lower or upper:
         keep = []
         for r in rows:
