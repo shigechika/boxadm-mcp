@@ -119,7 +119,7 @@ def test_scan_max_depth_2_bfs_order_and_count():
     non-root folders' items ARE listed (concurrently), and collaborations come back
     in cross-parent BFS order (all of A's children before B's) — pinning the
     level-synchronous drain + order-preserving merge a sequential walk would give."""
-    tree = {"0": ["A", "B"], "A": ["A1", "A2"], "B": ["B1", "B2"]}
+    tree = {"0": ["101", "102"], "101": ["111", "112"], "102": ["121", "122"]}
     r, collab_ids, item_ids = _tree_router(tree)
     with r:
         client, err = server._connect()
@@ -131,15 +131,15 @@ def test_scan_max_depth_2_bfs_order_and_count():
     assert scan["fetch_errors"] == 0
     # Non-root folders A and B were item-listed (depth 1 < 2), proving multi-level
     # concurrent item fetches actually happen — not just the root.
-    assert set(item_ids) == {"0", "A", "B"}
+    assert set(item_ids) == {"0", "101", "102"}
     # Cross-parent BFS order: level 1 (A,B) before level 2, and A's children before B's.
-    assert [c["folder_id"] for c in scan["external_collaborations"]] == ["A", "B", "A1", "A2", "B1", "B2"]
+    assert [c["folder_id"] for c in scan["external_collaborations"]] == ["101", "102", "111", "112", "121", "122"]
 
 
 def test_scan_max_depth_2_capped_prefix():
     """Budget cutting off partway through the depth-2 frontier visits the exact BFS
     prefix and sets capped — multi-level cap equivalence with a sequential walk."""
-    tree = {"0": ["A", "B"], "A": ["A1", "A2"], "B": ["B1", "B2"]}
+    tree = {"0": ["101", "102"], "101": ["111", "112"], "102": ["121", "122"]}
     r, collab_ids, _ = _tree_router(tree)
     with r:
         client, err = server._connect()
@@ -149,22 +149,22 @@ def test_scan_max_depth_2_capped_prefix():
     assert scan["folders_scanned"] == 4
     assert scan["capped"] is True
     # Only the BFS prefix's collaborations were queried (root has none).
-    assert set(collab_ids) == {"A", "B", "A1"}
+    assert set(collab_ids) == {"101", "102", "111"}
 
 
 def test_scan_deduplicates_folder_reachable_from_two_parents():
     """A subfolder id listed under two parents (root->[A,B], A->[C], B->[C]) is
     visited once: its collaborations are fetched once, it appears once, and it
     consumes the budget once (folders_scanned counts 4, not 5)."""
-    tree = {"0": ["A", "B"], "A": ["C"], "B": ["C"]}
+    tree = {"0": ["101", "102"], "101": ["103"], "102": ["103"]}
     r, collab_ids, _ = _tree_router(tree)
     with r:
         client, err = server._connect()
         scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
 
     assert scan["folders_scanned"] == 4  # root + A + B + C (C not double-counted)
-    assert collab_ids.count("C") == 1  # dup fetched only once
-    c_rows = [c for c in scan["external_collaborations"] if c["folder_id"] == "C"]
+    assert collab_ids.count("103") == 1  # dup fetched only once
+    c_rows = [c for c in scan["external_collaborations"] if c["folder_id"] == "103"]
     assert len(c_rows) == 1  # dup surfaces only once
 
 
@@ -177,10 +177,10 @@ def test_fetch_errors_capped_at_one_per_folder():
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(200, json=_root_items(["A"]))
-        if path == "/2.0/folders/A/collaborations":
+            return httpx.Response(200, json=_root_items(["101"]))
+        if path == "/2.0/folders/101/collaborations":
             return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
-        if path == "/2.0/folders/A/items":
+        if path == "/2.0/folders/101/items":
             return httpx.Response(403, json={"message": "forbidden"})  # also fails (403, not retried)
         return httpx.Response(200, json={"entries": []})
 
@@ -203,8 +203,8 @@ def test_public_shared_links_surfaces_fetch_errors():
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(200, json=_root_items(["A"]))
-        if path == "/2.0/folders/A/items":
+            return httpx.Response(200, json=_root_items(["101"]))
+        if path == "/2.0/folders/101/items":
             return httpx.Response(403, json={"message": "forbidden"})  # A's listing fails (403, not retried)
         return httpx.Response(200, json={"entries": []})
 
@@ -234,12 +234,12 @@ def test_scan_recovers_from_transient_429(monkeypatch):
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(200, json=_root_items(["A"]))
-        if path == "/2.0/folders/A/collaborations":
-            calls["A_collab"] += 1
-            if calls["A_collab"] == 1:
+            return httpx.Response(200, json=_root_items(["101"]))
+        if path == "/2.0/folders/101/collaborations":
+            calls["119"] += 1
+            if calls["119"] == 1:
                 return httpx.Response(429, json={"message": "rate limited"})  # transient throttle
-            return httpx.Response(200, json=_collab_body("A"))  # recovers on retry
+            return httpx.Response(200, json=_collab_body("101"))  # recovers on retry
         return httpx.Response(200, json={"entries": []})
 
     r = respx.mock(assert_all_called=False)
@@ -248,9 +248,9 @@ def test_scan_recovers_from_transient_429(monkeypatch):
         client, err = server._connect()
         scan = server._scan(client, "0", max_folders=100, max_depth=2, want_collabs=True, concurrency=4)
 
-    assert calls["A_collab"] == 2  # 429, then a successful retry
+    assert calls["119"] == 2  # 429, then a successful retry
     assert scan["fetch_errors"] == 0  # the transient throttle recovered, not counted
-    assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-A@gmail.com"]
+    assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-101@gmail.com"]
 
 
 # --------------------------------------------------------------------------
@@ -259,7 +259,7 @@ def test_scan_recovers_from_transient_429(monkeypatch):
 # --------------------------------------------------------------------------
 def test_concurrent_401_refresh_no_spurious_errors():
     n = 6
-    fids = [f"F{i}" for i in range(n)]
+    fids = [str(200 + i) for i in range(n)]
     seen_401: Counter = Counter()
     lock = threading.Lock()
 
@@ -300,7 +300,7 @@ def test_scan_fetches_collaborations_concurrently():
     """With ``concurrency=N`` and N sibling folders, all N collaboration calls are
     in-flight at once — proven by a Barrier that only releases once N parties wait."""
     n = 5
-    fids = [f"F{i}" for i in range(n)]
+    fids = [str(200 + i) for i in range(n)]
     barrier = threading.Barrier(n, timeout=15)
     lock = threading.Lock()
     passed_barrier: list[str] = []
@@ -341,7 +341,7 @@ def test_scan_fetches_collaborations_concurrently():
 def test_scan_capped_visits_exact_bfs_prefix():
     """max_folders below the reachable count still visits the BFS prefix (root +
     the first budget-1 folders), sets capped, and never touches folders past it."""
-    fids = [f"F{i}" for i in range(10)]
+    fids = [str(200 + i) for i in range(10)]
     queried: list[str] = []
     lock = threading.Lock()
 
@@ -367,11 +367,11 @@ def test_scan_capped_visits_exact_bfs_prefix():
     assert scan["folders_scanned"] == 5
     assert scan["capped"] is True
     # Exactly the BFS prefix's collaborations were queried — nothing past the cap.
-    assert set(queried) == {"F0", "F1", "F2", "F3"}
+    assert set(queried) == {"200", "201", "202", "203"}
 
 
 def test_scan_not_capped_when_everything_fits():
-    fids = [f"F{i}" for i in range(3)]
+    fids = [str(200 + i) for i in range(3)]
 
     def handler(request):
         path = request.url.path
@@ -398,7 +398,7 @@ def test_scan_output_order_matches_bfs_not_completion_order():
     """Workers are forced to *complete* in reverse (F2, then F1, then F0), yet the
     merged collaborations come back in listing order — proving executor.map's
     order-preserving merge, so results are deterministic under concurrency."""
-    fids = ["F0", "F1", "F2"]
+    fids = ["200", "201", "202"]
     ready = {f: threading.Event() for f in fids}
     start = threading.Barrier(len(fids), timeout=15)
 
@@ -412,13 +412,13 @@ def test_scan_output_order_matches_bfs_not_completion_order():
             fid = path.split("/")[3]
             start.wait()  # all three enter together
             # Release in reverse: F2 returns first and unblocks F1, which unblocks F0.
-            if fid == "F2":
-                ready["F1"].set()
-            elif fid == "F1":
-                ready["F1"].wait()
-                ready["F0"].set()
+            if fid == "202":
+                ready["201"].set()
+            elif fid == "201":
+                ready["201"].wait()
+                ready["200"].set()
             else:  # F0 completes last
-                ready["F0"].wait()
+                ready["200"].wait()
             collab = {"accessible_by": {"login": f"ext-{fid}@gmail.com"}, "role": "viewer", "status": "accepted"}
             return httpx.Response(200, json={"entries": [collab]})
         return httpx.Response(200, json={"entries": []})
@@ -430,8 +430,8 @@ def test_scan_output_order_matches_bfs_not_completion_order():
         scan = server._scan(client, "0", max_folders=100, max_depth=1, want_collabs=True, concurrency=3)
 
     # Output follows folder-listing (BFS) order F0, F1, F2 — not completion order.
-    assert [c["folder_id"] for c in scan["external_collaborations"]] == ["F0", "F1", "F2"]
-    assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-F0@gmail.com", "ext-F1@gmail.com", "ext-F2@gmail.com"]
+    assert [c["folder_id"] for c in scan["external_collaborations"]] == ["200", "201", "202"]
+    assert [c["collaborator"] for c in scan["external_collaborations"]] == ["ext-200@gmail.com", "ext-201@gmail.com", "ext-202@gmail.com"]
 
 
 # --------------------------------------------------------------------------
@@ -447,10 +447,10 @@ def test_scan_counts_and_surfaces_fetch_errors():
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(200, json=_root_items(["FOK", "FERR"]))
-        if path == "/2.0/folders/FOK/collaborations":
+            return httpx.Response(200, json=_root_items(["302", "301"]))
+        if path == "/2.0/folders/302/collaborations":
             return httpx.Response(200, json=EXT_COLLAB)
-        if path == "/2.0/folders/FERR/collaborations":
+        if path == "/2.0/folders/301/collaborations":
             return httpx.Response(403, json={"message": "forbidden"})  # permission error (fails fast, not retried)
         return httpx.Response(200, json={"entries": []})
 
@@ -463,7 +463,7 @@ def test_scan_counts_and_surfaces_fetch_errors():
     assert out["folders_scanned"] == 3  # both leaves consumed budget (root + FOK + FERR)
     # Only the reachable folder's external collaborator surfaces; FERR contributes none.
     assert {c["collaborator"] for c in out["external_collaborators"]} == {"ext@gmail.com"}
-    assert all(c["folder_id"] == "FOK" for c in out["external_collaborators"])
+    assert all(c["folder_id"] == "302" for c in out["external_collaborators"])
 
 
 def test_item_page_failure_counts_as_fetch_error():
@@ -521,13 +521,13 @@ def test_scan_concurrency_explicit_override_is_clamped(override, expected):
 
 def test_scan_with_zero_concurrency_clamps_and_runs():
     """_scan(concurrency=0) is clamped to 1 rather than crashing ThreadPoolExecutor."""
-    r, collab_ids, _ = _tree_router({"0": ["F0", "F1"]})
+    r, collab_ids, _ = _tree_router({"0": ["200", "201"]})
     with r:
         client, err = server._connect()
         assert err is None
         scan = server._scan(client, "0", max_folders=100, max_depth=1, want_collabs=True, concurrency=0)
     assert scan["folders_scanned"] == 3  # root + F0 + F1
-    assert set(collab_ids) == {"F0", "F1"}
+    assert set(collab_ids) == {"200", "201"}
 
 
 def test_scan_default_concurrency_still_correct():
@@ -541,7 +541,7 @@ def test_scan_default_concurrency_still_correct():
         if path == "/oauth2/token":
             return httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
         if path == "/2.0/folders/0/items":
-            return httpx.Response(200, json=_root_items(["F0", "F1", "F2"]))
+            return httpx.Response(200, json=_root_items(["200", "201", "202"]))
         if path.endswith("/collaborations"):
             with lock:
                 counts[path.split("/")[3]] += 1
@@ -555,7 +555,7 @@ def test_scan_default_concurrency_still_correct():
 
     assert out["count"] == 3
     assert out["fetch_errors"] == 0
-    assert set(counts) == {"F0", "F1", "F2"}  # each folder queried exactly once
+    assert set(counts) == {"200", "201", "202"}  # each folder queried exactly once
     assert all(v == 1 for v in counts.values())
 
 
@@ -576,7 +576,7 @@ def test_scan_deadline_cuts_scan_short(monkeypatch):
     monkeypatch.setattr(server, "time", _clock_stub([1000.0, 1000.0, 1000.0, 2000.0]))
 
     # root -> A,B (depth 1) -> A1,B1 (depth 2). The cut lands before depth 2 is scanned.
-    r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
+    r, collab_ids, _ = _tree_router({"0": ["101", "102"], "101": ["111"], "102": ["121"]})
     with r:
         client, err = server._connect()
         assert err is None
@@ -584,19 +584,19 @@ def test_scan_deadline_cuts_scan_short(monkeypatch):
 
     assert scan["capped"] is True
     assert scan["folders_scanned"] == 3  # root + A + B; A1/B1 cut by the deadline
-    assert sorted(collab_ids) == ["A", "B"]  # depth-2 folders never had collaborations fetched
-    assert {c["folder_id"] for c in scan["external_collaborations"]} == {"A", "B"}
+    assert sorted(collab_ids) == ["101", "102"]  # depth-2 folders never had collaborations fetched
+    assert {c["folder_id"] for c in scan["external_collaborations"]} == {"101", "102"}
 
 
 def test_scan_deadline_disabled_completes_full_walk():
     """deadline_seconds<=0 disables the deadline (inf), so the walk runs to completion."""
-    r, collab_ids, _ = _tree_router({"0": ["A", "B"], "A": ["A1"], "B": ["B1"]})
+    r, collab_ids, _ = _tree_router({"0": ["101", "102"], "101": ["111"], "102": ["121"]})
     with r:
         client, err = server._connect()
         scan = server._scan(client, "0", max_folders=100, max_depth=3, want_collabs=True, deadline_seconds=0, concurrency=4)
     assert scan["capped"] is False
-    assert scan["folders_scanned"] == 5  # root + A + B + A1 + B1
-    assert sorted(collab_ids) == ["A", "A1", "B", "B1"]
+    assert scan["folders_scanned"] == 5  # root + the two top-level folders + their two children
+    assert sorted(collab_ids) == ["101", "102", "111", "121"]
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,7 @@ import fcntl
 import json
 import os
 import random
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -95,6 +96,52 @@ class BoxAuthError(BoxError):
 
 class BoxNotAuthenticatedError(BoxAuthError):
     """No usable OAuth token cache — run ``boxadm-mcp auth`` to log in."""
+
+
+class BoxRequestError(BoxError):
+    """A caller's argument would have built a request other than the one intended.
+
+    Raised instead of being sent. Subclasses ``BoxError`` deliberately: the scan
+    tools catch ``BoxError`` per folder and count it into ``fetch_errors``, so a
+    refused id degrades exactly like an unreachable folder. A ``ValueError`` here
+    would escape ``ThreadPoolExecutor.map`` into the tool and surface as a raw
+    traceback, losing both the coverage disclosure and the structured-error shape.
+    """
+
+
+#: Box resource ids are decimal strings. The ceiling is a length bound, not a
+#: value bound: httpx raises ``InvalidURL`` on an over-long URL, and that is NOT
+#: a subclass of ``httpx.HTTPError`` (verified), so ``_get``'s handler would not
+#: catch it and the caller would get a traceback instead of an error dict.
+_ID_RE = re.compile(r"[0-9]{1,20}")
+
+
+def _validate_resource_id(value: str, *, kind: str) -> str:
+    """Return ``value`` stripped, or raise ``BoxRequestError``.
+
+    An id is interpolated into the request PATH, and ``httpx.URL`` resolves
+    ``..`` segments the way a browser does. So an id of ``../users`` does not
+    produce a 404 — it silently rewrites ``/2.0/folders/../users`` into
+    ``/2.0/users``, i.e. a DIFFERENT endpoint, and a query string smuggled into
+    the same argument rides along. ``/2.0/users`` with no ``filter_term`` is a
+    page of the enterprise directory, which is precisely the enumeration
+    ``get_user`` refuses to perform.
+
+    Hence the check is on the id itself and runs before ANY interpolation, not
+    before one particular call: the danger is not specific to a path that has a
+    suffix after the id, and reasoning about a suffix ("``/items`` makes the
+    rewritten path harmless") does not hold for the suffix-less form.
+
+    ``fullmatch`` rather than an anchored ``match``: ``$`` also matches before a
+    trailing newline. Stripping already removes a TRAILING one here, so the two
+    forms agree on ``"123\\n"`` — but they part company on an id whose newline is
+    interior, and ``fullmatch`` is the form that does not depend on the strip
+    above staying where it is.
+    """
+    stripped = (value or "").strip()
+    if not _ID_RE.fullmatch(stripped):
+        raise BoxRequestError(f"invalid {kind} id: must be a decimal Box id")
+    return stripped
 
 
 def default_token_cache() -> str:
@@ -307,16 +354,48 @@ class _FolderReadMixin:
         return True
 
     def get_folder(self, folder_id: str, *, fields: list[str] | None = None) -> dict:
-        return self._get(f"/folders/{folder_id}", {"fields": ",".join(fields)} if fields else None)
+        """One folder's own record. See ``_validate_resource_id`` for why the id is checked."""
+        fid = _validate_resource_id(folder_id, kind="folder")
+        return self._get(f"/folders/{fid}", {"fields": ",".join(fields)} if fields else None)
 
-    def get_folder_items(self, folder_id: str, *, fields: list[str] | None = None, limit: int = 1000, offset: int = 0) -> dict:
+    def get_folder_items(
+        self,
+        folder_id: str,
+        *,
+        fields: list[str] | None = None,
+        limit: int = 1000,
+        offset: int = 0,
+        sort: str | None = None,
+        direction: str | None = None,
+    ) -> dict:
+        """One page of a folder's children.
+
+        ``sort`` / ``direction`` are passed through when given. Box documents
+        ``sort`` as the **second** sort attribute — entries are ordered by TYPE
+        first (folders, then files, then web links) and only then by ``sort``. So
+        ``sort="date", direction="DESC"`` does not produce a globally newest-first
+        list; it produces newest-first *within each type*. Callers that present
+        this as "most recent" must say which.
+
+        Offset paging is Box's own caveat, not this client's: Box documents that
+        offset-based paging "is not guaranteed to work reliably for high offset
+        values" (marker paging is the reliable form). One page plus an honest
+        truncation flag is therefore sounder than deep offset walking.
+        """
+        fid = _validate_resource_id(folder_id, kind="folder")
         params: dict = {"limit": limit, "offset": offset}
         if fields:
             params["fields"] = ",".join(fields)
-        return self._get(f"/folders/{folder_id}/items", params)
+        if sort:
+            params["sort"] = sort
+        if direction:
+            params["direction"] = direction
+        return self._get(f"/folders/{fid}/items", params)
 
     def get_folder_collaborations(self, folder_id: str) -> dict:
-        return self._get(f"/folders/{folder_id}/collaborations")
+        """One folder's collaborations. See ``_validate_resource_id`` for why the id is checked."""
+        fid = _validate_resource_id(folder_id, kind="folder")
+        return self._get(f"/folders/{fid}/collaborations")
 
     def get_users(
         self,

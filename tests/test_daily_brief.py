@@ -10,12 +10,12 @@ ROOT_ITEMS = {
     "entries": [
         {
             "type": "folder",
-            "id": "F1",
+            "id": "201",
             "name": "alpha",
             "owned_by": {"login": "ownerA@internal.example"},
             "shared_link": {"access": "open", "permissions": {"can_download": True}},
         },
-        {"type": "file", "id": "X", "name": "x.pdf", "owned_by": {"login": "ownerA@internal.example"}, "shared_link": None},
+        {"type": "file", "id": "501", "name": "x.pdf", "owned_by": {"login": "ownerA@internal.example"}, "shared_link": None},
     ],
 }
 F1_COLLABS = {
@@ -27,13 +27,13 @@ ACCESS_EVENTS = [
     {
         "event_type": "DOWNLOAD",
         "created_by": {"login": "vendor@example.com"},
-        "source": {"item_id": "X", "item_name": "x.pdf", "owned_by": {"login": "ownerA@internal.example"}},
+        "source": {"item_id": "501", "item_name": "x.pdf", "owned_by": {"login": "ownerA@internal.example"}},
         "additional_details": {"size": 10, "shared_link_id": "lnk"},
     },
     {
         "event_type": "PREVIEW",
         "created_by": {"login": "u@internal.example"},
-        "source": {"item_id": "X", "item_name": "x.pdf", "owned_by": {"login": "ownerA@internal.example"}},
+        "source": {"item_id": "501", "item_name": "x.pdf", "owned_by": {"login": "ownerA@internal.example"}},
         "additional_details": {"size": 5},
     },
 ]
@@ -55,7 +55,7 @@ def _router():
             return httpx.Response(200, json={"entries": ACCESS_EVENTS, "next_stream_position": "p1"})
         if path == "/2.0/folders/0/items":
             return httpx.Response(200, json=ROOT_ITEMS)
-        if path == "/2.0/folders/F1/collaborations":
+        if path == "/2.0/folders/201/collaborations":
             return httpx.Response(200, json=F1_COLLABS)
         return httpx.Response(200, json={"entries": []})
 
