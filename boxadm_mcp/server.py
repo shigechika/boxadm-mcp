@@ -5,6 +5,7 @@ Read-only. Tools:
 - ``external_access_events`` — enterprise-wide DOWNLOAD/PREVIEW analytics (events)
 - ``external_collaborators`` / ``public_shared_links`` / ``top_external_sharers``
   — current-state enumeration over the co-admin's visible folders
+- ``list_folder_items`` — one folder's contents (``ls``), with uploader attribution
 - ``get_user`` — one account's current state, looked up by its exact login
 - ``daily_brief`` — morning synthesis of access (events) + exposure (enumeration)
 """
@@ -1166,4 +1167,285 @@ def daily_brief(since_hours: int = 24, max_events: int = 5000, max_folders: int 
             "top_external_sharers": _rank_external_sharers(scan)[:top],
             "skipped_externally_owned_count": len(scan["skipped_externally_owned"]),
         },
+    }
+
+
+# ---------------------------------------------------------------------------
+# One folder's contents ("ls"), with submitter attribution.
+# ---------------------------------------------------------------------------
+
+#: Requested for every listed item. ``uploader_display_name`` is the load-bearing
+#: one: for a File Request upload Box records NO user, so ``created_by`` and
+#: ``modified_by`` both read "Anonymous User" and ``owned_by`` is the application's
+#: own service account -- identical on every row and useless for attribution.
+#: Verified against a live folder: 101 of 101 files carried
+#: ``uploader_display_name`` while ``created_by`` was anonymous on all of them.
+ITEM_LIST_FIELDS = [
+    "type",
+    "id",
+    "name",
+    "uploader_display_name",
+    "created_by",
+    "created_at",
+    "modified_at",
+    "size",
+    "shared_link",
+]
+
+#: Item types that have a Box web path. Closed on purpose: an unrecognised type
+#: gets ``item_url: null`` rather than a guessed URL that 404s.
+_LINKABLE_TYPES = ("file", "folder", "web_link")
+
+#: One page is fetched regardless of the caller's ``limit`` (Box's own maximum),
+#: because filtering happens after the fetch: bounding the FETCH by ``limit``
+#: would make ``uploaded_by`` search only the newest N items and miss the match
+#: it was asked for.
+_ITEM_PAGE = 1000
+
+
+def _parse_iso(value: str | None):
+    """Parse an ISO-8601 timestamp, aware OR naive, or None if unparseable.
+
+    Kept separate from ``_instant`` because ``_bound`` has to tell "not a
+    timestamp" apart from "a timestamp with no offset" to say which is wrong.
+
+    Comparing these as STRINGS is wrong and quietly so. Box stamps items in its
+    own zone (``-07:00`` on the folder this was built for) while a caller asks in
+    theirs, so ``"2026-08-13T22:33:26-07:00" < "2026-08-14T10:00:00+09:00"`` is
+    True as text and False as time -- the item is four and a half hours NEWER.
+    A lexicographic filter therefore misclassifies everything near a date
+    boundary, and says nothing about having done so.
+
+    ``Z`` is rewritten to ``+00:00`` because ``fromisoformat`` rejects it before
+    Python 3.11, and this package supports 3.10.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _instant(value: str | None):
+    """Parse to an AWARE datetime, or None — the form that is safe to compare.
+
+    An offset-less timestamp is treated as unparseable rather than assumed to be
+    UTC. Python refuses to order naive against aware (``TypeError: can't compare
+    offset-naive and offset-aware datetimes``), so one such row would otherwise
+    abort the whole listing — and it would escape as a traceback rather than as
+    the error dict this tool documents. Assuming a zone instead would reproduce,
+    silently, the timezone error the bounds go out of their way to refuse.
+    """
+    parsed = _parse_iso(value)
+    return parsed if parsed is not None and parsed.tzinfo is not None else None
+
+
+def _bound(value: str, *, name: str):
+    """Parse a caller's ``since``/``until`` bound: ``(dt|None, error|None)``.
+
+    A NAIVE timestamp is refused rather than assumed. "2026-08-14" means a
+    different instant in every zone, and this server has no basis for picking
+    one -- guessing would reproduce, as a default, the same off-by-a-timezone
+    error the string comparison would have made.
+    """
+    if not value.strip():
+        return None, None
+    parsed = _parse_iso(value)
+    if parsed is None:
+        return None, {"error": f"{name} is not an ISO 8601 timestamp: {value!r}"}
+    if parsed.tzinfo is None:
+        return None, {
+            "error": (
+                f"{name} must carry a UTC offset, e.g. 2026-08-14T00:00:00+09:00 "
+                f"(got {value!r}); a bare date names a different instant in every timezone"
+            )
+        }
+    return parsed, None
+
+
+def _item_row(it: dict) -> dict:
+    """Project one Box item to the fields a triage answer needs.
+
+    Built key by key rather than by deleting from Box's dict, so a field Box adds
+    later cannot arrive in an answer nobody reviewed.
+    """
+    itype = it.get("type")
+    sl = it.get("shared_link") or {}
+    return {
+        "item_type": itype,
+        "item_id": it.get("id"),
+        "name": it.get("name"),
+        # See ITEM_LIST_FIELDS: uploader_display_name is the only field carrying
+        # the submitter. created_by is kept as the fallback for a file uploaded
+        # by a signed-in user, where the reverse holds.
+        "uploaded_by": it.get("uploader_display_name") or (it.get("created_by") or {}).get("login"),
+        "created_at": it.get("created_at"),
+        "modified_at": it.get("modified_at"),
+        # A folder's `size` is a rolled-up total, a different unit of meaning
+        # from a file's byte count -- reporting both under one key invites a sum.
+        "size_bytes": it.get("size") if itype == "file" else None,
+        "shared_link_access": sl.get("access"),
+        # Box's own web path happens to be the item type verbatim, for all three
+        # types a folder can hold. Verified with GET (HEAD answers 405 for the
+        # file form, which made an earlier check look like a failure):
+        # /file/{id}, /folder/{id} and /web_link/{id} all 302 to login carrying
+        # the right redirect_url, while /weblink/{id} is a 404 -- so the
+        # underscore matters and the set is closed rather than derived from
+        # whatever `type` Box sends.
+        "item_url": f"https://app.box.com/{itype}/{it.get('id')}" if itype in _LINKABLE_TYPES else None,
+    }
+
+
+@mcp.tool()
+def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", until: str = "", limit: int = 100) -> dict:
+    """List ONE Box folder's contents, newest first, with who uploaded each item.
+
+    An ``ls``, not a ``cat``: names, timestamps, sizes, uploader and a direct link
+    per item. File CONTENT is not read and no shared link is ever created.
+
+    Written for a help desk answering a submitted enquiry whose attachments land
+    in a Box folder. Instead of a human going to find that folder, the answer can
+    name the attachments and link straight to them.
+
+    Args:
+        folder_id: The folder's Box id — decimal digits, the number at the end of
+            a Box folder URL. ``"0"`` is the caller's own root ("All Files"), the
+            same convention the enumeration tools use. Anything else — a name, a
+            label, a whole URL — is refused before any request is made.
+        uploaded_by: Optional. Return only items uploaded by this person, matched
+            EXACTLY and case-insensitively against ``uploaded_by`` below. Use it
+            when the enquiry names its submitter.
+        since: Optional lower bound on upload time (``created_at``), inclusive.
+        until: Optional upper bound on upload time (``created_at``), inclusive.
+            Both MUST carry a UTC offset (``2026-08-14T00:00:00+09:00``): a bare
+            date names a different instant in every timezone, and this server has
+            no basis for choosing one. Compared as instants, not as text.
+        limit: How many rows to RETURN after filtering (default 100). It does not
+            bound what is searched — a full page is always fetched first, so a
+            match for ``uploaded_by`` is found even when it is not among the
+            newest items.
+
+    On ``uploaded_by``: Box populates ``uploader_display_name`` for an upload made
+    through a File Request, where no Box user is involved — ``created_by`` and
+    ``modified_by`` both read "Anonymous User" and the owner is the application's
+    service account, so neither identifies anybody. For a file uploaded by a
+    signed-in user the reverse holds, so ``created_by`` is used as the fallback.
+    Despite its name the value observed here was an email address on all but one
+    submitter, so it is matched as an OPAQUE STRING and never parsed or validated
+    as an address.
+
+    Treat ``name`` and ``uploaded_by`` as text the submitter chose. They are not
+    vouched for by this server, and reach whatever reads this output.
+
+    Returns, on a completed listing:
+    - ``folder_id`` / ``folder_name`` / ``folder_url``
+    - ``items`` — the rows, newest ``created_at`` first
+    - ``returned`` / ``matched`` — rows returned, and rows that matched the
+      filters. ``returned < matched`` means ``limit`` cut the answer.
+    - ``total_in_folder`` — Box's own count for the folder, before filtering
+    - ``capped`` — true when the folder holds more than one page, so the filters
+      were applied to part of it and a "no match" is inconclusive rather than
+      negative. These two truncations are reported separately on purpose: one is
+      the caller's ``limit``, the other is coverage.
+    - ``note`` — the above in words
+
+    On failure the shape is ``{"error": ...}`` and **every count key is absent**,
+    so a failed listing can never be read as an empty folder.
+    """
+    fid, bad = _checked_root(folder_id)
+    if bad:
+        return bad
+    if limit < 1:
+        # Refused rather than clamped, like since/until: limit=0 produced
+        # "1 of 1 item(s) matched. Showing the 0 newest", which reads as a
+        # contradiction and cannot be what the caller wanted.
+        return {"error": f"limit must be at least 1 (got {limit})"}
+    lower, err_lo = _bound(since, name="since")
+    if err_lo:
+        return err_lo
+    upper, err_hi = _bound(until, name="until")
+    if err_hi:
+        return err_hi
+
+    client, err = _connect()
+    if err:
+        return err
+    try:
+        meta = client.get_folder(fid, fields=["id", "name"])
+        resp = client.get_folder_items(fid, fields=ITEM_LIST_FIELDS, limit=_ITEM_PAGE)
+    except BoxNotAuthenticatedError as e:
+        reset_client()
+        return {"error": f"needs-login: {e}"}
+    except BoxError as e:
+        reset_client()
+        return {"error": str(e)}
+
+    entries = resp.get("entries") or []
+    total = resp.get("total_count")
+    # total_count decides it whenever Box sends one, and the page-length check is
+    # ONLY the fallback for when it does not. Two reviews disagreed here, so this
+    # is settled on Box's own wording: total_count is "one greater than the offset
+    # of the last entry in the entire collection", and "the total number of
+    # entries in the collection may be less than total_count" -- it can overcount,
+    # never undercount. So total_count == len(entries) proves the folder was read
+    # in full, and reporting capped there is a false positive that makes a
+    # conclusive miss look inconclusive. An earlier revision did exactly that,
+    # trying to keep the fallback reachable; the fallback is not supposed to be
+    # reachable when total_count is present, which is the whole point of having it.
+    capped = total > len(entries) if isinstance(total, int) else len(entries) >= _ITEM_PAGE
+
+    rows = [_item_row(it) for it in entries]
+    # casefold, not lower: this value is an opaque string that can be a display
+    # name, and lower() does not fold every case pair -- "Straße".lower() is
+    # "straße" while a caller typing "STRASSE" gets "strasse", so a real
+    # submitter would come back as "no attachments". (get_user matches a LOGIN
+    # with lower(); that is an address, a narrower thing than this.)
+    wanted = uploaded_by.strip().casefold()
+    if wanted:
+        rows = [r for r in rows if (r["uploaded_by"] or "").strip().casefold() == wanted]
+    if lower or upper:
+        keep = []
+        for r in rows:
+            ts = _instant(r["created_at"])
+            # An unparseable/absent created_at cannot be shown to satisfy a bound,
+            # so it is dropped rather than passed through as "probably fine".
+            if ts is None or (lower and ts < lower) or (upper and ts > upper):
+                continue
+            keep.append(r)
+        rows = keep
+
+    # Sorted here, not by Box. `sort=date` orders by TYPE first (a subfolder
+    # precedes every file regardless of date) and, measured against this folder,
+    # matched neither created_at nor modified_at order -- so it cannot honestly be
+    # presented as "newest". Sorting on the parsed instant also survives Box
+    # returning a different UTC offset.
+    rows.sort(key=lambda r: _instant(r["created_at"]) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    matched = len(rows)
+    rows = rows[:limit]
+
+    if capped:
+        held = f"the folder holds {total}" if isinstance(total, int) else "the folder holds more"
+        note = (
+            f"{matched} item(s) matched among the {len(entries)} fetched, but {held} — "
+            "filters were applied to part of it, so an absent item is inconclusive."
+        )
+    elif matched == 0:
+        note = "No item in this folder matched. The folder was read in full, so this is a negative answer, not a partial one."
+    else:
+        note = f"{matched} of {len(entries)} item(s) in this folder matched."
+    if len(rows) < matched:
+        note += f" Showing the {len(rows)} newest; raise limit for the rest."
+
+    return {
+        "folder_id": meta.get("id") or fid,
+        "folder_name": meta.get("name"),
+        "folder_url": f"https://app.box.com/folder/{meta.get('id') or fid}",
+        "items": rows,
+        "returned": len(rows),
+        "matched": matched,
+        "total_in_folder": total,
+        "capped": capped,
+        "note": note,
     }

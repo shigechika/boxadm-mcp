@@ -29,6 +29,7 @@ Named after the admin-console viewpoint (`boxadm` = Box admin), sibling of
 | `external_collaborators` | Exposure (enumeration) | Lists external collaborators (outside-org login or external invite email) |
 | `public_shared_links` | Exposure (enumeration) | Lists items shared with an `open` (anyone-with-the-link) share link |
 | `top_external_sharers` | Exposure (enumeration) | Ranks internal owners by external exposure (external collabs + public links) |
+| `list_folder_items` | One folder (`ls`) | Names, upload time, size, **who uploaded**, and a direct link per item. Filter by uploader or upload-time window. Reads no file content |
 | `get_user` | Account state (lookup) | One account by its **exact login**: `status`, `role`, `enterprise`, quota, timestamps. Answers "is this account disabled?" without an admin console |
 | `daily_brief` | Combined | Morning summary combining access (events) and exposure (enumeration) |
 
@@ -149,6 +150,40 @@ external_access_events(since_hours=26, created_by_logins="someone@example.com")
   `capped: true` means the window wasn't fully scanned — raise `max_events`.
 - Box's `admin_logs` API has no `created_by` query parameter, so this is a
   client-side filter (`fetch_admin_events(created_by_logins=...)`).
+
+### One folder's contents (`list_folder_items`)
+
+An `ls`, not a `cat`. Written for a help desk answering a submitted enquiry whose
+attachments land in a Box folder: instead of a human going to find that folder,
+the answer names the attachments and links straight to them. File content is
+never read, and no shared link is ever created — an existing one is reported
+because it is an exposure finding, not a convenience.
+
+**Who uploaded an item is not where you would look for it.** For an upload made
+through a File Request, Box records no user at all: `created_by` and
+`modified_by` both read *"Anonymous User"*, and `owned_by` is the application's
+own service account — identical on every row. The only field carrying the
+submitter is `uploader_display_name`, and despite its name the value observed in
+practice was an email address. It is therefore matched as an **opaque string**
+(exact, case-insensitive) and never parsed or validated as an address. For a file
+uploaded by a signed-in user the reverse holds, so `created_by` is the fallback.
+
+Ordering and time bounds are computed here rather than by Box:
+
+- Box documents `sort` as the **second** sort attribute — items order by type
+  first, so a subfolder precedes every file regardless of date. Measured against
+  a real folder, `sort=date` also matched neither `created_at` nor `modified_at`
+  order, so it cannot honestly be presented as "newest".
+- `since` / `until` are compared as **instants, not text**. Box stamps items in
+  its own UTC offset while a caller asks in theirs, so a lexicographic comparison
+  is wrong by that difference at every date boundary and silent about it. Both
+  bounds must carry an offset; a bare date is refused rather than guessed.
+
+`limit` bounds what is RETURNED, not what is searched — a full page is fetched
+first, so an uploader's item is found even when it is not among the newest.
+Truncation is disclosed twice over, because they are different truths: `returned`
+vs `matched` is the caller's own limit, while `capped` means the folder holds
+more than one page and a miss is inconclusive rather than negative.
 
 ### Per-account lookup (`get_user`)
 

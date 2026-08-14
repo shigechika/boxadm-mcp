@@ -128,6 +128,24 @@ PROBES: dict[str, Probe] = {
         require_keys=("requested_login", "found", "capped", "note"),
         must_match=(r'"found": false',),
     ),
+    # -- one folder's contents -----------------------------------------------
+    # Folder "0" is the caller's own root, already the allowed literal here: it
+    # names no enterprise and every account has one. Bounded explicitly (`limit`)
+    # because the tool fetches a full page regardless, and asserts the disclosure
+    # keys rather than any row -- a root with nothing in it is a legitimate answer
+    # on a fresh tenant, so requiring an item would make the probe flaky rather
+    # than strict.
+    "list_folder_items": Probe(
+        args={"folder_id": ROOT_FOLDER, "limit": 5},
+        require_keys=("folder_id", "items", "returned", "matched", "capped", "note"),
+        # The PATH form only. The address-shape test scans this file and rejects
+        # a URL literal down to the bare scheme, so the host is asserted in the
+        # unit tests instead (test_links_use_the_generic_host_...). The path is
+        # the half that would regress here anyway.
+        must_match=(r'"folder_url": ".*/folder/0"',),
+        rows_key="items",
+        allow_empty=True,
+    ),
     # -- morning patrol ------------------------------------------------------
     # The brief runs the access analytics and the exposure scan back to back,
     # so it is the slowest tool here and the one whose composition can silently
