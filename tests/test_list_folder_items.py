@@ -323,16 +323,31 @@ def test_an_offset_less_timestamp_does_not_abort_the_listing():
     assert [i["item_id"] for i in out["items"]] == ["aware", "naive"]
 
 
-def test_a_full_page_is_capped_even_when_total_count_agrees():
-    """The page-boundary net must not be unreachable.
+def test_a_full_page_whose_total_count_agrees_is_NOT_capped():
+    """Settled on Box's wording after two reviews disagreed.
 
-    Trusting `total_count` alone meant a folder of exactly one page reported
-    `capped: false` and "read in full" — the confident negative this design
-    avoids everywhere else. A full page cannot be told from a truncated one
-    without asking again, so it discloses.
+    `total_count` is "one greater than the offset of the last entry in the entire
+    collection", and "the total number of entries in the collection may be less
+    than total_count" — it can overcount, never undercount. So 1000 entries with
+    `total_count: 1000` proves the folder was read in full, and flagging capped
+    there is a false positive that makes a conclusive miss look inconclusive.
     """
     entries = [_upload(str(i), "a@example.com", "2026-08-01T00:00:00+00:00") for i in range(1000)]
     r, _ = _router(entries, total=1000)
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER, uploaded_by="nobody@example.com", limit=5)
+    assert out["capped"] is False
+    assert "negative answer" in out["note"]
+
+
+def test_a_full_page_with_no_total_count_IS_capped():
+    """The fallback, and the only case it is meant to cover: with no total_count
+    a full page cannot be told from a truncated one."""
+    r = respx.mock(assert_all_called=False)
+    r.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "t", "expires_in": 3600}))
+    r.get(FOLDER_URL).mock(return_value=httpx.Response(200, json={"type": "folder", "id": FOLDER, "name": "f"}))
+    entries = [_upload(str(i), "a@example.com", "2026-08-01T00:00:00+00:00") for i in range(1000)]
+    r.get(ITEMS_URL).mock(return_value=httpx.Response(200, json={"entries": entries}))
     with r:
         out = _call(server.list_folder_items)(folder_id=FOLDER, uploaded_by="nobody@example.com", limit=5)
     assert out["capped"] is True

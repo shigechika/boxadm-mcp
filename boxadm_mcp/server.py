@@ -1383,13 +1383,17 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
 
     entries = resp.get("entries") or []
     total = resp.get("total_count")
-    # Both conditions, not one or the other: trusting total_count alone makes the
-    # page-boundary net unreachable whenever Box sends any int, so a folder of
-    # exactly _ITEM_PAGE items reports "read in full" and turns a miss into a
-    # confident negative. A folder of exactly that size now reports capped=True
-    # instead -- the honest trade, since a full page cannot be told from a
-    # truncated one without asking again.
-    capped = (isinstance(total, int) and total > len(entries)) or len(entries) >= _ITEM_PAGE
+    # total_count decides it whenever Box sends one, and the page-length check is
+    # ONLY the fallback for when it does not. Two reviews disagreed here, so this
+    # is settled on Box's own wording: total_count is "one greater than the offset
+    # of the last entry in the entire collection", and "the total number of
+    # entries in the collection may be less than total_count" -- it can overcount,
+    # never undercount. So total_count == len(entries) proves the folder was read
+    # in full, and reporting capped there is a false positive that makes a
+    # conclusive miss look inconclusive. An earlier revision did exactly that,
+    # trying to keep the fallback reachable; the fallback is not supposed to be
+    # reachable when total_count is present, which is the whole point of having it.
+    capped = total > len(entries) if isinstance(total, int) else len(entries) >= _ITEM_PAGE
 
     rows = [_item_row(it) for it in entries]
     # casefold, not lower: this value is an opaque string that can be a display
