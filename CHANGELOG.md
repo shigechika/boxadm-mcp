@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/shigechika/boxadm-mcp/compare/v0.8.0...v0.9.0) (2026-08-15)
+
+
+### Features
+
+* package the server as a Claude Code plugin ([#57](https://github.com/shigechika/boxadm-mcp/issues/57)) ([94ca8d8](https://github.com/shigechika/boxadm-mcp/commit/94ca8d88f6bf2b1319c32bd41937e8f6a7398b5d))
+
 ## [0.8.0](https://github.com/shigechika/boxadm-mcp/compare/v0.7.1...v0.8.0) (2026-08-14)
 
 
