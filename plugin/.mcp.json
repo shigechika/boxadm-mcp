@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "boxadm-mcp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["boxadm-mcp"],
+      "env": {
+        "BOX_AUTH_MODE": "${BOX_AUTH_MODE:-ccg}",
+        "BOX_CLIENT_ID": "${BOX_CLIENT_ID:-}",
+        "BOX_CLIENT_SECRET": "${BOX_CLIENT_SECRET:-}",
+        "BOX_ENTERPRISE_ID": "${BOX_ENTERPRISE_ID:-}",
+        "BOX_OAUTH_REDIRECT_URI": "${BOX_OAUTH_REDIRECT_URI:-http://localhost:8787/callback}",
+        "BOX_TOKEN_CACHE": "${BOX_TOKEN_CACHE:-}",
+        "BOX_API_BASE": "${BOX_API_BASE:-https://api.box.com}",
+        "BOX_SCAN_CONCURRENCY": "${BOX_SCAN_CONCURRENCY:-8}",
+        "BOX_SCAN_DEADLINE": "${BOX_SCAN_DEADLINE:-45}",
+        "BOX_HTTP_TIMEOUT": "${BOX_HTTP_TIMEOUT:-30}",
+        "BOX_ALLOWED_DOMAINS": "${BOX_ALLOWED_DOMAINS:-}"
+      }
+    }
+  }
+}

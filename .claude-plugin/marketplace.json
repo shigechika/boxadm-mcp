@@ -1,0 +1,17 @@
+{
+  "name": "boxadm-mcp",
+  "description": "boxadm-mcp server, packaged as a Claude Code plugin.",
+  "owner": {
+    "name": "AIKAWA Shigechika",
+    "url": "https://github.com/shigechika"
+  },
+  "plugins": [
+    {
+      "name": "boxadm-mcp",
+      "source": "./plugin",
+      "description": "Box admin-log analytics for Claude Code: external-sharing visibility from Box's enterprise event log (admin_logs) — who shares a lot with the outside, which files get accessed from outside, and a one-shot daily_brief health check. Read-only; never revokes shares, deletes files, or mutates anything.",
+      "category": "security",
+      "homepage": "https://shigechika.github.io/boxadm-mcp/"
+    }
+  ]
+}

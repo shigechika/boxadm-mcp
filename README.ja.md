@@ -8,6 +8,8 @@ Box の管理（admin）視点で**組織外への情報フローを可視化**�
 ファイル」を炙り出す — 情報漏洩の予兆に気づくための早期警戒であり、
 汎用のファイルブラウザではない。
 
+ドキュメント: <https://shigechika.github.io/boxadm-mcp/ja/>
+
 **read-only**： 共有解除・削除などの変更操作は一切行わない — リスクを
 見せるだけ。汎用の Box ファイル操作 MCP（公式 Box MCP・claude.ai の Box
 コネクタ）とは別物で、あちらはユーザー自身のファイルを扱い enterprise
@@ -222,7 +224,29 @@ get_user(login="someone@example.com")
 
 ## 使い方
 
-### Claude Code
+### Claude Code（プラグイン）
+
+このリポジトリはプラグイン 1 個のマーケットプレイスも兼ねているので、Claude Code から
+そのまま導入できます。
+
+```
+/plugin marketplace add shigechika/boxadm-mcp
+/plugin install boxadm-mcp@boxadm-mcp
+```
+
+プラグインは `uvx boxadm-mcp` を起動し、[設定](#設定)に書かれた環境変数と同じものを
+読みます。Claude Code を起動する前に `BOX_CLIENT_ID`・`BOX_CLIENT_SECRET`・
+`BOX_ENTERPRISE_ID`（ccg 時）・`BOX_ALLOWED_DOMAINS` を export しておいてください。
+プラグインは既定で `BOX_AUTH_MODE=ccg` を使います — `oauth` に切り替えるのは
+自分で一度 `boxadm-mcp auth` を実行した後にしてください。ブラウザでの認可手順や
+生成される token cache ファイルはプラグイン側では用意できません。
+
+プラグインは `uvx` を起動するため、Claude Code を実行するプロセスの `PATH` に
+`uvx` が通っている必要があります。ログインシェルなら通常問題ありませんが、
+GUI から起動した場合は通っていないことがあります。プラグインが起動しない場合は
+[uv](https://docs.astral.sh/uv/) をシステム全体にインストールしてください。
+
+### Claude Code（手動）
 
 `.mcp.json` に追加する:
 
@@ -234,8 +258,8 @@ get_user(login="someone@example.com")
       "command": "boxadm-mcp",
       "env": {
         "BOX_AUTH_MODE": "oauth",
-        "BOX_CLIENT_ID": "${BOX_CLIENT_ID}",
-        "BOX_CLIENT_SECRET": "${BOX_CLIENT_SECRET}",
+        "BOX_CLIENT_ID": "${BOX_CLIENT_ID:-}",
+        "BOX_CLIENT_SECRET": "${BOX_CLIENT_SECRET:-}",
         "BOX_ALLOWED_DOMAINS": "example.com"
       }
     }

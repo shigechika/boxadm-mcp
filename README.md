@@ -10,6 +10,8 @@ a Box admin's point of view. It reads Box's enterprise event log
 files get accessed from outside" — an early-warning signal for leakage, not a
 general-purpose file browser.
 
+Documentation: <https://shigechika.github.io/boxadm-mcp/>
+
 **Read-only**: it never revokes shares, deletes files, or otherwise mutates
 anything — it only surfaces risk. This is a different tool from a
 general-purpose Box file MCP (the official Box MCP, or the claude.ai Box
@@ -227,7 +229,29 @@ directory-wide prefix search this tool refuses by design.
 
 ## Usage
 
-### Claude Code
+### Claude Code (plugin)
+
+This repository doubles as a single-plugin marketplace, so Claude Code can install
+the server for you:
+
+```
+/plugin marketplace add shigechika/boxadm-mcp
+/plugin install boxadm-mcp@boxadm-mcp
+```
+
+The plugin launches `uvx boxadm-mcp` and reads the same environment variables
+described in [Configuration](#configuration); export `BOX_CLIENT_ID`,
+`BOX_CLIENT_SECRET`, `BOX_ENTERPRISE_ID` (ccg mode), and `BOX_ALLOWED_DOMAINS`
+before starting Claude Code. The plugin ships with `BOX_AUTH_MODE=ccg` by default —
+switch to `oauth` only after running `boxadm-mcp auth` once yourself, since the
+plugin cannot provision that browser step or the resulting token cache file for
+you.
+
+`uvx` must be on the `PATH` of the process that runs Claude Code — a login
+shell usually has it, but a GUI-launched app may not; install
+[uv](https://docs.astral.sh/uv/) system-wide if the plugin fails to start.
+
+### Claude Code (manual)
 
 Add to `.mcp.json`:
 
@@ -239,8 +263,8 @@ Add to `.mcp.json`:
       "command": "boxadm-mcp",
       "env": {
         "BOX_AUTH_MODE": "oauth",
-        "BOX_CLIENT_ID": "${BOX_CLIENT_ID}",
-        "BOX_CLIENT_SECRET": "${BOX_CLIENT_SECRET}",
+        "BOX_CLIENT_ID": "${BOX_CLIENT_ID:-}",
+        "BOX_CLIENT_SECRET": "${BOX_CLIENT_SECRET:-}",
         "BOX_ALLOWED_DOMAINS": "example.com"
       }
     }

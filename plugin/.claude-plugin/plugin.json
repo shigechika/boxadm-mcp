@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "boxadm-mcp",
+  "displayName": "Box Admin MCP",
+  "description": "Box admin-log analytics for Claude Code: external-sharing visibility from Box's enterprise event log (admin_logs) — who shares a lot with the outside, which files get accessed from outside, and a one-shot daily_brief health check. Read-only; never revokes shares, deletes files, or mutates anything. In oauth mode (BOX_AUTH_MODE=oauth) it needs a local OAuth token cache file (default ~/.config/boxadm-mcp/token.json, created once by running `boxadm-mcp auth`) that the plugin's own settings cannot fully provision — the default ccg mode needs no such file, but does require BOX_ENTERPRISE_ID. Requires BOX_CLIENT_ID, BOX_CLIENT_SECRET, BOX_ENTERPRISE_ID (ccg mode), and BOX_ALLOWED_DOMAINS.",
+  "author": {
+    "name": "AIKAWA Shigechika",
+    "url": "https://github.com/shigechika"
+  },
+  "homepage": "https://shigechika.github.io/boxadm-mcp/",
+  "repository": "https://github.com/shigechika/boxadm-mcp",
+  "license": "MIT",
+  "keywords": [
+    "box",
+    "dlp",
+    "security",
+    "audit",
+    "file-sharing",
+    "admin"
+  ]
+}
