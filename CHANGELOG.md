@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/shigechika/boxadm-mcp/compare/v0.9.0...v0.9.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **smoke:** accept get_user's list-free envelope; document the verified Manage users scope ([#59](https://github.com/shigechika/boxadm-mcp/issues/59)) ([433b968](https://github.com/shigechika/boxadm-mcp/commit/433b968439e523f0a1245b608002c17cf39f1042))
+
 ## [0.9.0](https://github.com/shigechika/boxadm-mcp/compare/v0.8.0...v0.9.0) (2026-08-15)
 
 
