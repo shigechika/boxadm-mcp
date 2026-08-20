@@ -203,17 +203,21 @@ def test_get_user_capped_is_false_on_a_complete_result():
 
 
 def test_get_user_permission_failure_names_the_likely_cause():
-    """Guards against a bare HTTP status for the one endpoint whose access is unverified.
+    """Guards against a bare HTTP status on the endpoint's known permission failure.
 
-    ``/2.0/users`` reachability has not been confirmed end-to-end in either auth
-    mode, so a 403 must point at the authorising user's role and the app's scopes
-    instead of leaving an operator with "HTTP 403".
+    The 403 observed in production was resolved by granting the 'Manage users'
+    application scope and re-authorising, so the hint must name that scope, the
+    re-authorisation step (a scope change does not reach refresh-token-minted
+    tokens), and the authorising user's role — not leave an operator with
+    "HTTP 403".
     """
     r, _ = _users_router({"code": "access_denied_insufficient_permissions"}, status=403)
     with r:
         out = _call(server.get_user)(login=ASKED_FOR)
     assert "HTTP 403" in out["error"]
     assert "role" in out["likely_cause"] and "Scopes" in out["likely_cause"]
+    assert "Manage users" in out["likely_cause"]
+    assert "re-authorised" in out["likely_cause"]
     assert "found" not in out  # a permission failure is not a statement about the account
 
 

@@ -123,10 +123,14 @@ PROBES: dict[str, Probe] = {
     # negative answer is the assertion that matters. "found": false proves the
     # user directory answered AND that the exact-match filter refused whatever
     # the prefix search returned — a tool reporting the first hit would say true.
+    # allow_empty because the answer is an envelope with no list in it at all:
+    # without it the harness demands list-shaped rows and fails the healthy
+    # not-found response (which is what this probe is designed to receive).
     "get_user": Probe(
         args={"login": ABSENT_LOGIN},
         require_keys=("requested_login", "found", "capped", "note"),
         must_match=(r'"found": false',),
+        allow_empty=True,
     ),
     # -- one folder's contents -----------------------------------------------
     # Folder "0" is the caller's own root, already the allowed literal here: it
