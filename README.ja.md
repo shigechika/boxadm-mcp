@@ -52,7 +52,9 @@ properties** スコープ」があること。
 2. **リダイレクト URI**： `http://localhost:8787/callback`
 3. **Application Scopes**： **Manage enterprise properties** にチェック
    （`admin_logs` に必須）。collaboration/共有リンクの列挙も使うなら
-   **Read all files and folders** も追加（再同意が必要）
+   **Read all files and folders**、`get_user` の照会も使うなら
+   **Manage users（ユーザーを管理する）** も追加（スコープ変更のたびに
+   `boxadm-mcp auth` での再同意が必要）
 4. Admin Console でアプリを有効化する（多くのテナントポリシーでは未公開
    アプリは既定無効）
 5. **Client ID / Client Secret** を控える
@@ -216,11 +218,15 @@ get_user(login="someone@example.com")
 | `search_hits`・`note` | 返ってきた件数と、以上を平文で言い直したもの |
 
 > [!NOTE]
-> `/2.0/users` に到達できるかは**どちらの認証モードでも実地検証できていない**
-> ため、この README では必要スコープをあえて断定しない。`oauth` モードでは
-> 実効権限は認可したユーザー本人のものになる。権限エラー時は素の HTTP
-> ステータスではなく `likely_cause` を返し、確認すべき2点 — そのユーザーの
-> Box ロールと、アプリの Application Scopes — を名指しする。
+> `oauth` モードでのこのエンドポイントの要件は**実地検証済み**:
+> アプリが **「ユーザーを管理する」(Manage users) アプリケーションスコープ**
+> を持っている必要がある。無いと、認可したユーザーがユーザー管理権限を持つ
+> 共同管理者であっても `/2.0/users` は 403 を返す（有れば 200）。注意点は
+> 2つ — 実効権限は依然として認可ユーザー本人のロールが上限になること、
+> そして Developer Console でスコープを追加しても既存のリフレッシュトークン
+> から発行されるトークンには**反映されない**こと（`boxadm-mcp auth` での
+> 対話的な再認可が必要）。`ccg` モードでは未検証のまま。権限エラー時は
+> 素の HTTP ステータスではなく、以上を平文で言う `likely_cause` を返す。
 
 ## 使い方
 

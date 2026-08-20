@@ -56,7 +56,9 @@ enterprise properties** scope.
 2. **Redirect URI**: `http://localhost:8787/callback`
 3. **Application Scopes**: check **Manage enterprise properties** (required
    for `admin_logs`). Add **Read all files and folders** too if you also want
-   collaboration/share-link enumeration (requires re-consent)
+   collaboration/share-link enumeration, and **Manage users** if you want the
+   `get_user` lookup (each scope change requires re-consent via
+   `boxadm-mcp auth`)
 4. Enable the app in the Admin Console (unpublished apps are disabled by
    default under most tenant policies)
 5. Note the **Client ID / Client Secret**
@@ -220,12 +222,16 @@ directory-wide prefix search this tool refuses by design.
 | `search_hits`, `note` | How many entries came back, and a plain-language reading |
 
 > [!NOTE]
-> Whether `/2.0/users` is reachable **has not been verified end-to-end** in
-> either auth mode, so this README deliberately claims no scope requirement for
-> it. Under `oauth` the effective permission is the authorising user's. A
-> permission failure returns `likely_cause` naming the two things to check —
-> that user's Box role, and the app's Application Scopes — rather than a bare
-> HTTP status.
+> In `oauth` mode this endpoint's requirement **is verified end-to-end**: the
+> app must hold the **"Manage users" application scope**. Without it
+> `/2.0/users` answers 403 even when the authorising user is a co-admin who can
+> manage users; with it, 200. Two caveats: the effective permission is still
+> capped by the authorising user's own role, and a scope added in the Developer
+> Console does **not** reach tokens minted from an existing refresh token — the
+> app must be re-authorised interactively (`boxadm-mcp auth`) before the new
+> scope takes effect. Under `ccg` the endpoint remains unverified. A permission
+> failure returns `likely_cause` saying all of this rather than a bare HTTP
+> status.
 
 ## Usage
 

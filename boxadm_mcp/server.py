@@ -976,18 +976,22 @@ def _is_email_shaped(term: str) -> bool:
 def _user_lookup_hint(message: str) -> str | None:
     """Actionable cause for a permission failure on the user lookup, else None.
 
-    ``/2.0/users`` is not verified end-to-end in either auth mode (see ``get_user``),
-    so a bare "HTTP 403" leaves an operator with nothing to act on. The two things
-    worth checking are named instead — deliberately without asserting which scope is
-    required, because that has not been confirmed here. Keyed off the message
-    ``_get`` raises (``HTTP <status>: GET <path>``).
+    A bare "HTTP 403" leaves an operator with nothing to act on, so the checks
+    that resolved the one observed in production are named. Verified end-to-end
+    in oauth mode (2026-08): ``/2.0/users`` answered 403 while the app lacked
+    the "Manage users" application scope — even though the authorising user was
+    a co-admin who could manage users — and answered 200 once the scope was
+    granted AND the app re-authorised. Keyed off the message ``_get`` raises
+    (``HTTP <status>: GET <path>``).
     """
     if "HTTP 403" in message or "HTTP 401" in message:
         return (
-            "The app could not read the enterprise user directory. This is a permission result, not a statement about the account: "
-            "in oauth mode the effective permission is the AUTHORISING user's, so check that user's Box role (an admin / co-admin "
-            "with user visibility), and check the app's Application Scopes in the Box Developer Console. Which scope this endpoint "
-            "requires has not been verified end-to-end for this server."
+            "The app could not read the enterprise user directory. This is a permission result, not a statement about the account. "
+            "In oauth mode this endpoint requires the app to hold the 'Manage users' application scope (verified end-to-end: 403 "
+            "without it even for a co-admin authorising user, 200 with it) AND the authorising user's role to be an admin / "
+            "co-admin with user visibility. Check the app's Application Scopes in the Box Developer Console first; note that a "
+            "scope added there does NOT reach tokens minted from an existing refresh token — the app must be re-authorised "
+            "interactively (`boxadm-mcp auth`) before the new scope takes effect."
         )
     return None
 
@@ -1057,13 +1061,14 @@ def get_user(login: str) -> dict:
     On failure the other shape is returned: ``{"error": ...}`` (missing env / ``needs-login`` for an expired
     OAuth session / a Box API error), plus ``likely_cause`` when the failure was a
     permission one. **``found`` is absent from that shape on purpose** — a failed lookup
-    is not a negative answer, and must never be read as "no such account". Auth caveat,
-    stated honestly: this server supports two auth modes,
-    and under ``oauth`` the effective permission is the authorising user's. Whether
-    ``/2.0/users`` is reachable **has not been verified end-to-end** in either mode, and
-    no scope requirement is claimed here that was not confirmed — a permission failure
-    therefore points at the authorising user's role and the app's Application Scopes
-    rather than asserting which one is at fault.
+    is not a negative answer, and must never be read as "no such account". Auth caveat:
+    this server supports two auth modes, and under ``oauth`` the effective permission is
+    the authorising user's. In oauth mode the requirement IS verified end-to-end: the
+    app must hold the **"Manage users" application scope** (without it ``/2.0/users``
+    answers 403 even when the authorising user is a co-admin who can manage users), and
+    a scope added in the Developer Console only reaches tokens from a fresh interactive
+    authorisation — refresh-token rotation keeps the original grant's scopes. Under
+    ``ccg`` the endpoint remains unverified for this server.
     """
     needle = login.strip()
     if not needle:

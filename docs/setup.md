@@ -37,7 +37,9 @@ enterprise properties** scope.
 2. **Redirect URI**: `http://localhost:8787/callback`
 3. **Application Scopes**: check **Manage enterprise properties** (required
    for `admin_logs`). Add **Read all files and folders** too if you also want
-   collaboration/share-link enumeration (requires re-consent)
+   collaboration/share-link enumeration, and **Manage users** if you want the
+   `get_user` lookup (each scope change requires re-consent via
+   `boxadm-mcp auth`)
 4. Enable the app in the Admin Console (unpublished apps are disabled by
    default under most tenant policies)
 5. Note the **Client ID / Client Secret**

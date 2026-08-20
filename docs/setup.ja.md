@@ -36,7 +36,9 @@ properties** スコープ」があることです。
 2. **リダイレクト URI**: `http://localhost:8787/callback`
 3. **Application Scopes**: **Manage enterprise properties** にチェック
    （`admin_logs` に必須）。collaboration/共有リンクの列挙も使うなら
-   **Read all files and folders** も追加（再同意が必要）
+   **Read all files and folders**、`get_user` の照会も使うなら
+   **Manage users（ユーザーを管理する）** も追加（スコープ変更のたびに
+   `boxadm-mcp auth` での再同意が必要）
 4. Admin Console でアプリを有効化する（多くのテナントポリシーでは未公開
    アプリは既定無効）
 5. **Client ID / Client Secret** を控える
