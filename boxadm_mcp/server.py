@@ -15,8 +15,9 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
+from boxadm_mcp import __version__
 from boxadm_mcp.client import (
     BoxClient,
     BoxError,
@@ -28,7 +29,7 @@ from boxadm_mcp.client import (
 )
 from boxadm_mcp.config import allowed_domains, is_external
 
-mcp = FastMCP("boxadm-mcp")
+mcp = MCPServer("boxadm-mcp", version=__version__)
 
 # admin_logs event types that represent content access (read paths).
 ACCESS_EVENT_TYPES = ["DOWNLOAD", "PREVIEW"]
@@ -126,7 +127,6 @@ def health_check() -> dict:
     ``events_accessible`` (bool), and ``allowed_domains``. On a degraded or error
     result, ``detail`` carries the reason.
     """
-    from boxadm_mcp import __version__
 
     result: dict = {
         "status": "healthy",

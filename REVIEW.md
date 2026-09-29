@@ -87,7 +87,7 @@ reviewer also receives.
 - A long line that fits within `line-length = 150`. The wider limit in
   `pyproject.toml` is deliberate.
 - Suggestions to hand-build an MCP content envelope
-  (`{"content": [...], "isError": ...}`) inside a tool handler. FastMCP
+  (`{"content": [...], "isError": ...}`) inside a tool handler. MCPServer
   wraps returned values already.
 - Suggestions to *replace* `release-please.yml`'s
   `secrets.RELEASE_PLEASE_TOKEN` with `GITHUB_TOKEN`. Preferring the
