@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/shigechika/boxadm-mcp/compare/v0.9.1...v0.10.0) (2026-09-29)
+
+
+### Features
+
+* require mcp 2.x (MCPServer) and drop 1.x support ([#66](https://github.com/shigechika/boxadm-mcp/issues/66)) ([eed7d9a](https://github.com/shigechika/boxadm-mcp/commit/eed7d9af4a1caf2a7368a8887842d7de8b4390d4))
+
 ## [0.9.1](https://github.com/shigechika/boxadm-mcp/compare/v0.9.0...v0.9.1) (2026-08-20)
 
 
