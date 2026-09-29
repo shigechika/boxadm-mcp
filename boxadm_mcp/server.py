@@ -10,12 +10,16 @@ Read-only. Tools:
 - ``daily_brief`` — morning synthesis of access (events) + exposure (enumeration)
 """
 
+import functools
+import inspect
 import math
 import os
 import time
 from datetime import datetime, timedelta, timezone
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.shared.exceptions import MCPError
 
 from boxadm_mcp import __version__
 from boxadm_mcp.client import (
@@ -29,7 +33,52 @@ from boxadm_mcp.client import (
 )
 from boxadm_mcp.config import allowed_domains, is_external
 
-mcp = MCPServer("boxadm-mcp", version=__version__)
+
+def _expose_errors(fn):
+    """Wrap a tool so any exception reaches the model as a ToolError with its message.
+
+    mcp 1.x returned the exception text for every failing tool. mcp 2.x hides it
+    (the model sees only "Error executing tool <name>") unless a ToolError is raised.
+    """
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except (ToolError, MCPError):
+                raise
+            except Exception as exc:
+                raise ToolError(str(exc) or type(exc).__name__) from exc
+
+    else:
+
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except (ToolError, MCPError):
+                raise
+            except Exception as exc:
+                raise ToolError(str(exc) or type(exc).__name__) from exc
+
+    return wrapper
+
+
+class _Server(MCPServer):
+    """MCPServer whose tools report their exception messages (see _expose_errors)."""
+
+    def tool(self, *args, **kwargs):
+        register = super().tool(*args, **kwargs)
+
+        def decorator(fn):
+            register(_expose_errors(fn))
+            return fn
+
+        return decorator
+
+
+mcp = _Server("boxadm-mcp", version=__version__)
 
 # admin_logs event types that represent content access (read paths).
 ACCESS_EVENT_TYPES = ["DOWNLOAD", "PREVIEW"]
