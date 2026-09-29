@@ -3,7 +3,7 @@
 `boxadm-mcp` is an MCP (Model Context Protocol) server exposing Box
 admin-log analytics (external file access, external sharing exposure) to AI
 assistants over **stdio transport**. Built on the official `mcp` Python
-SDK's `FastMCP` (`boxadm_mcp/server.py`), with `BoxClient`/`BoxOAuthClient`
+SDK's `MCPServer` (`boxadm_mcp/server.py`), with `BoxClient`/`BoxOAuthClient`
 (`boxadm_mcp/client.py`) wrapping the Box Enterprise API. Read-only: no tool
 ever revokes a share, deletes a file, or otherwise mutates anything.
 
@@ -66,10 +66,10 @@ auth` CLI path (`__main__.py`'s `_auth()`), never while `mcp.run()` is
 active. Flag any new code path that could print to stdout while the stdio
 server is running.
 
-## 3. FastMCP already wraps tool returns — don't ask for manual envelope code
+## 3. MCPServer already wraps tool returns — don't ask for manual envelope code
 
 `server.py`'s `@mcp.tool()`-decorated functions return plain `dict` values;
-FastMCP handles the MCP content-envelope wrapping itself. Do **not** suggest
+MCPServer handles the MCP content-envelope wrapping itself. Do **not** suggest
 a tool handler manually construct `{"content": [...], "isError": ...}`.
 
 ## 4. `capped` must be set whenever a scan or window is cut short

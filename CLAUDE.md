@@ -5,7 +5,7 @@
 MCP (Model Context Protocol) server surfacing external file flow from a Box
 admin's point of view — reads the Box enterprise event log (`admin_logs`)
 to highlight who shares a lot with the outside and which files get accessed
-from outside. Built on the official `mcp` Python SDK's `FastMCP`
+from outside. Built on the official `mcp` Python SDK's `MCPServer`
 (`boxadm_mcp/server.py`), over **stdio transport**. Read-only: no tool ever
 revokes a share, deletes a file, or otherwise mutates anything.
 
@@ -26,7 +26,7 @@ test runs.
 
 ## Architecture
 
-- `boxadm_mcp/server.py` — FastMCP server with 9 tools: `health_check`,
+- `boxadm_mcp/server.py` — MCPServer server with 9 tools: `health_check`,
   `recent_admin_events` (raw diagnostic), `external_access_events`
   (enterprise-wide DOWNLOAD/PREVIEW analytics, plus a `created_by_logins`
   DLP-tracing mode), `external_collaborators` / `public_shared_links` /
