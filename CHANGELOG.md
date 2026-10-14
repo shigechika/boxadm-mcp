@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/shigechika/boxadm-mcp/compare/v0.10.0...v0.11.0) (2026-10-14)
+
+
+### Features
+
+* list_folder_items reports the folder's owner and path ([#69](https://github.com/shigechika/boxadm-mcp/issues/69)) ([828e70c](https://github.com/shigechika/boxadm-mcp/commit/828e70c7309f87ebc337f5386270ced374a8d211))
+
 ## [0.10.0](https://github.com/shigechika/boxadm-mcp/compare/v0.9.1...v0.10.0) (2026-09-29)
 
 
