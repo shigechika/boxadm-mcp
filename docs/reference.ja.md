@@ -20,7 +20,7 @@ allowlist を報告します。`oauth` モードでは初回の `boxadm-mcp auth
 | `external_collaborators` | 露出（列挙） | 外部 collaborator（組織外 login / 外部招待メール）を列挙 |
 | `public_shared_links` | 露出（列挙） | `open`（誰でもリンク）共有の item を列挙 |
 | `top_external_sharers` | 露出（列挙） | 内部 owner を外部露出（外部 collab + 公開リンク）で順位付け |
-| `list_folder_items` | フォルダ1つの一覧（`ls`） | 各アイテムの名前・アップロード日時・サイズ・**アップロード者**・直リンク。アップロード者や日時範囲で絞り込める。ファイルの中身は読まない |
+| `list_folder_items` | フォルダ1つの一覧（`ls`） | 各アイテムの名前・アップロード日時・サイズ・**アップロード者**・直リンク、フォルダの所有者とパス。アップロード者や日時範囲で絞り込める。ファイルの中身は読まない |
 | `get_user` | アカウント状態（単体照会） | **login 完全一致**で1アカウントを照会。`status`・`role`・`enterprise`・容量・日時 |
 | `daily_brief` | 統合 | アクセス（events）× 露出（列挙）の朝サマリ |
 
@@ -85,6 +85,10 @@ external_access_events(since_hours=26, created_by_logins="someone@example.com")
 （大文字小文字は無視）で照合し、メールアドレスとして解釈はしません。
 サインイン済みユーザーが普通にアップロードした場合は逆になるので、
 `created_by` をフォールバックに使います。
+
+フォルダ自身の `owned_by` と `path_collection` を `folder_owner`（`{login, name}`）と
+`folder_path` として返します。所有者が個人のログインなら、「このフォルダは誰の個人領域に
+あるか」に答えられます（同僚の個人領域にあるフォルダの移動を頼まれたときなど）。
 
 並び順と日時範囲はサーバー側で計算します。`sort=date` は実運用上
 `created_at`/`modified_at` の順序と一致しないことがあり、`since`/`until`

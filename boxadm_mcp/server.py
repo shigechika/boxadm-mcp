@@ -1394,6 +1394,11 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
 
     Returns, on a completed listing:
     - ``folder_id`` / ``folder_name`` / ``folder_url``
+    - ``folder_owner`` — ``{login, name}`` of the folder's owner, or null. A
+      person's login answers "whose own space is this folder in?" (a folder in
+      someone's personal space cannot be moved by an admin into a shared one).
+    - ``folder_path`` — the parent folders from the top joined with ``/``, as Box
+      shows them to this server's account (null when Box sends no path)
     - ``items`` — the rows, newest ``created_at`` first
     - ``returned`` / ``matched`` — rows returned, and rows that matched the
       filters. ``returned < matched`` means ``limit`` cut the answer.
@@ -1426,7 +1431,7 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     if err:
         return err
     try:
-        meta = client.get_folder(fid, fields=["id", "name"])
+        meta = client.get_folder(fid, fields=["id", "name", "owned_by", "path_collection"])
         resp = client.get_folder_items(fid, fields=ITEM_LIST_FIELDS, limit=_ITEM_PAGE)
     except BoxNotAuthenticatedError as e:
         reset_client()
@@ -1492,10 +1497,17 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     if len(rows) < matched:
         note += f" Showing the {len(rows)} newest; raise limit for the rest."
 
+    owner = meta.get("owned_by") or {}
+    path = [p.get("name") for p in (meta.get("path_collection") or {}).get("entries") or [] if p.get("name")]
     return {
         "folder_id": meta.get("id") or fid,
         "folder_name": meta.get("name"),
         "folder_url": f"https://app.box.com/folder/{meta.get('id') or fid}",
+        # Who owns this folder: a person's login means it sits in that person's own
+        # space ("whose personal folder is this in?"); null when Box sends no owner.
+        "folder_owner": {"login": owner.get("login"), "name": owner.get("name")} if owner else None,
+        # Parent folders from the top, as Box shows them to this server's account.
+        "folder_path": "/".join([*path, meta.get("name") or ""]) if path else None,
         "items": rows,
         "returned": len(rows),
         "matched": matched,

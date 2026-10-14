@@ -40,10 +40,11 @@ def _upload(fid, who, created, *, name=None, size=100):
     }
 
 
-def _router(entries, *, total=None, folder_name="Enquiries"):
+def _router(entries, *, total=None, folder_name="Enquiries", folder_extra=None):
     r = respx.mock(assert_all_called=False)
     r.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"access_token": "t", "expires_in": 3600}))
-    r.get(FOLDER_URL).mock(return_value=httpx.Response(200, json={"type": "folder", "id": FOLDER, "name": folder_name}))
+    folder = {"type": "folder", "id": FOLDER, "name": folder_name, **(folder_extra or {})}
+    r.get(FOLDER_URL).mock(return_value=httpx.Response(200, json=folder))
     items = r.get(ITEMS_URL).mock(
         return_value=httpx.Response(200, json={"total_count": len(entries) if total is None else total, "entries": entries})
     )
@@ -375,3 +376,30 @@ def test_a_limit_below_one_is_refused_not_clamped():
         out = _call(server.list_folder_items)(folder_id=FOLDER, limit=0)
         assert items.call_count == 0  # refused before the request, like since/until
     assert "error" in out and "at least 1" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# Folder owner and path
+# ---------------------------------------------------------------------------
+def test_folder_owner_and_path_are_reported():
+    """'Whose personal folder is this in?' is answered by owned_by, without a human opening Box."""
+    extra = {
+        "owned_by": {"type": "user", "id": "9", "login": "hanako@example.com", "name": "Hanako"},
+        "path_collection": {"total_count": 2, "entries": [{"id": "0", "name": "All Files"}, {"id": "7", "name": "Lab"}]},
+    }
+    r, _ = _router([], folder_extra=extra)
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER)
+        folder_call = next(c for c in r.calls if c.request.url.path.endswith(f"/folders/{FOLDER}"))
+        fields = folder_call.request.url.params["fields"]
+    assert out["folder_owner"] == {"login": "hanako@example.com", "name": "Hanako"}
+    assert out["folder_path"] == "All Files/Lab/Enquiries"
+    assert "owned_by" in fields and "path_collection" in fields
+
+
+def test_missing_owner_and_path_are_null():
+    r, _ = _router([])
+    with r:
+        out = _call(server.list_folder_items)(folder_id=FOLDER)
+    assert out["folder_owner"] is None
+    assert out["folder_path"] is None
