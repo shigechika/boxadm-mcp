@@ -21,7 +21,7 @@ folders or page the event stream.
 | `external_collaborators` | Exposure (enumeration) | Lists external collaborators (outside-org login or external invite email) |
 | `public_shared_links` | Exposure (enumeration) | Lists items shared with an `open` (anyone-with-the-link) share link |
 | `top_external_sharers` | Exposure (enumeration) | Ranks internal owners by external exposure (external collabs + public links) |
-| `list_folder_items` | One folder (`ls`) | Names, upload time, size, **who uploaded**, and a direct link per item. Filter by uploader or upload-time window. Reads no file content |
+| `list_folder_items` | One folder (`ls`) | Names, upload time, size, **who uploaded**, and a direct link per item, plus the folder's owner and path. Filter by uploader or upload-time window. Reads no file content |
 | `get_user` | Account state (lookup) | One account by its **exact login**: `status`, `role`, `enterprise`, quota, timestamps |
 | `daily_brief` | Combined | Morning summary combining access (events) and exposure (enumeration) |
 
@@ -87,6 +87,11 @@ application's own service account. The only field carrying the submitter is
 matched as an **opaque string** (exact, case-insensitive), never parsed as an
 address. For a file uploaded by a signed-in user the reverse holds, so
 `created_by` is the fallback.
+
+The folder's own `owned_by` and `path_collection` are returned as
+`folder_owner` (`{login, name}`) and `folder_path`. A person's login there
+answers "whose own space is this folder in?", for example when someone asks to
+move a folder that turns out to sit in a colleague's personal space.
 
 Ordering and time bounds are computed by the server rather than trusted to
 Box: `sort=date` does not reliably match `created_at`/`modified_at` order in

@@ -31,7 +31,7 @@ Named after the admin-console viewpoint (`boxadm` = Box admin), sibling of
 | `external_collaborators` | Exposure (enumeration) | Lists external collaborators (outside-org login or external invite email) |
 | `public_shared_links` | Exposure (enumeration) | Lists items shared with an `open` (anyone-with-the-link) share link |
 | `top_external_sharers` | Exposure (enumeration) | Ranks internal owners by external exposure (external collabs + public links) |
-| `list_folder_items` | One folder (`ls`) | Names, upload time, size, **who uploaded**, and a direct link per item. Filter by uploader or upload-time window. Reads no file content |
+| `list_folder_items` | One folder (`ls`) | Names, upload time, size, **who uploaded**, and a direct link per item, plus the folder's owner and path. Filter by uploader or upload-time window. Reads no file content |
 | `get_user` | Account state (lookup) | One account by its **exact login**: `status`, `role`, `enterprise`, quota, timestamps. Answers "is this account disabled?" without an admin console |
 | `daily_brief` | Combined | Morning summary combining access (events) and exposure (enumeration) |
 
