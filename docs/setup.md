@@ -117,6 +117,21 @@ shell usually has it, but a GUI-launched app may not; install
 }
 ```
 
+### Codex
+
+```bash
+codex mcp add boxadm-mcp \
+  --env BOX_AUTH_MODE=oauth \
+  --env BOX_CLIENT_ID=your-client-id \
+  --env BOX_CLIENT_SECRET=your-client-secret \
+  --env BOX_ALLOWED_DOMAINS=example.com \
+  -- boxadm-mcp
+```
+
+Any other MCP client that launches stdio servers works the same way: give it
+`boxadm-mcp` as the command and set the `BOX_*` variables above in its
+environment.
+
 ### CLI
 
 ```bash

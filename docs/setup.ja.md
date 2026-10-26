@@ -116,6 +116,19 @@ GUI から起動した場合は通っていないことがあります。プラ�
 }
 ```
 
+### Codex
+
+```bash
+codex mcp add boxadm-mcp \
+  --env BOX_AUTH_MODE=oauth \
+  --env BOX_CLIENT_ID=your-client-id \
+  --env BOX_CLIENT_SECRET=your-client-secret \
+  --env BOX_ALLOWED_DOMAINS=example.com \
+  -- boxadm-mcp
+```
+
+stdio サーバーを起動できる MCP クライアントなら、どれでも同じ形で使えます。コマンドに `boxadm-mcp` を指定し、上記の環境変数 `BOX_*` を設定してください。
+
 ### CLI
 
 ```bash
