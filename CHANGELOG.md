@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/shigechika/boxadm-mcp/compare/v0.11.0...v0.11.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **deps:** bump certifi and opentelemetry-api (security) ([#71](https://github.com/shigechika/boxadm-mcp/issues/71)) ([08cb4e3](https://github.com/shigechika/boxadm-mcp/commit/08cb4e3ddc5b3874d5f4ddb5ef4dea1ab4148c7b))
+
 ## [0.11.0](https://github.com/shigechika/boxadm-mcp/compare/v0.10.0...v0.11.0) (2026-10-14)
 
 
