@@ -20,14 +20,17 @@ import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 
 DEFAULT_TIMEOUT = 30
 DEFAULT_API_BASE = "https://api.box.com"
-#: Where Box serves representation content (``content.url_template``). It needs the
-#: same bearer token as the API, so it is the one other host the token may go to.
-DOWNLOAD_BASE = "https://dl.boxcloud.com"
+#: Box serves representation content (``content.url_template``) from hosts under
+#: this domain -- ``dl.boxcloud.com`` was observed, ``public.boxcloud.com`` is in
+#: Box's own examples. Such a URL needs the same bearer token as the API, so these
+#: are the only other hosts the token may go to.
+DOWNLOAD_DOMAIN = ".boxcloud.com"
 TOKEN_PATH = "/oauth2/token"
 API_PREFIX = "/2.0"
 
@@ -419,23 +422,23 @@ class _FolderReadMixin:
         """GET an absolute API URL from a Box response (e.g. a representation's ``info.url``)."""
         return self._get(self._api_path(url))
 
-    def get_text(self, url: object, *, max_bytes: int) -> tuple[str, bool]:
+    def get_text(self, url: object, *, max_bytes: int, deadline: float) -> tuple[str, bool]:
         """Fetch a representation's text from its content URL, reading at most ``max_bytes``.
 
         Returns ``(text, cut)``; ``cut`` is true when the body was longer than
         ``max_bytes``. The URL comes from Box's JSON and is followed only when it
-        is on the configured API base or on Box's download host (``DOWNLOAD_BASE``),
-        the two places the bearer token may go. httpx drops the ``Authorization``
-        header if a redirect leaves the origin, so a hop elsewhere goes without it.
+        is on the configured API base or on a Box download host (https, a
+        ``*.boxcloud.com`` name, path under ``/api/2.0/``): the places the bearer
+        token may go. httpx drops the ``Authorization`` header if a redirect
+        leaves the origin, so a hop elsewhere goes without it.
+
+        ``deadline`` (``time.monotonic()``) bounds the whole fetch, retries and
+        reading included. 429 / 5xx / connection errors and a 202 ("not ready")
+        are retried like ``_get`` does, within that deadline.
         """
-        target = None
-        for base in (self._base + API_PREFIX, DOWNLOAD_BASE + "/api" + API_PREFIX):
-            if isinstance(url, str) and url.startswith(base + "/"):
-                target = url
-                _assert_endpoint_intact(url[len(base) :])
-        if target is None:
-            raise BoxRequestError("refusing a URL outside the configured Box API")
+        target = self._content_url(url)
         reauthed = False
+        attempt = 0
         while True:
             token = self._ensure_token()
             try:
@@ -445,21 +448,51 @@ class _FolderReadMixin:
                     headers={"Authorization": f"Bearer {token}"},
                     follow_redirects=True,
                 ) as resp:
-                    if resp.status_code == 401 and not reauthed:
+                    status = resp.status_code
+                    if status == 401 and not reauthed:
                         self._on_401()
                         reauthed = True
                         continue
-                    if resp.status_code != 200:
-                        raise BoxError(f"HTTP {resp.status_code}: GET representation content")
+                    if status in _RETRYABLE_STATUS or status == 202:
+                        if self._retry_ok(attempt, deadline, _backoff_delay(attempt, resp)):
+                            attempt += 1
+                            continue
+                        raise BoxError(f"HTTP {status}: GET representation content")
+                    if status != 200:
+                        raise BoxError(f"HTTP {status}: GET representation content")
                     body = bytearray()
                     for chunk in resp.iter_bytes():
                         body.extend(chunk)
                         if len(body) > max_bytes:
                             break
+                        if time.monotonic() > deadline:
+                            raise BoxError("timed out reading representation content")
             except httpx.HTTPError as e:
+                if self._retry_ok(attempt, deadline, _backoff_delay(attempt)):
+                    attempt += 1
+                    continue
                 raise BoxError(f"connection error: GET representation content: {e}") from e
             cut = len(body) > max_bytes
             return bytes(body[:max_bytes]).decode("utf-8", errors="replace"), cut
+
+    def _content_url(self, url: object) -> str:
+        """``url`` if the bearer token may be sent there, else ``BoxRequestError``."""
+        if isinstance(url, str):
+            if url.startswith(self._base + API_PREFIX + "/"):
+                _assert_endpoint_intact(url[len(self._base + API_PREFIX) :])
+                return url
+            parts = urlsplit(url)
+            host = parts.hostname or ""
+            if (
+                parts.scheme == "https"
+                and host.endswith(DOWNLOAD_DOMAIN)
+                and parts.port is None
+                and not parts.username
+                and parts.path.startswith("/api" + API_PREFIX + "/")
+            ):
+                _assert_endpoint_intact(url[len(f"https://{parts.netloc}/api" + API_PREFIX) :])
+                return url
+        raise BoxRequestError("refusing a URL outside the configured Box API")
 
     def get_folder(self, folder_id: str, *, fields: list[str] | None = None) -> dict:
         """One folder's own record. See ``_validate_resource_id`` for why the id is checked."""

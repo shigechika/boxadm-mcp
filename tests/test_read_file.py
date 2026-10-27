@@ -237,3 +237,83 @@ def test_a_content_url_with_a_dot_segment_is_not_followed(enabled):
     with r:
         out = _call(server.read_file)(FILE)
         assert "dot segment" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups
+# ---------------------------------------------------------------------------
+def test_a_leading_empty_cell_keeps_its_tab():
+    """A1 empty: dropping the leading tab would shift the header one column left."""
+    assert server._tidy("\tName\tAge\t\t\nAlice\t30\t\t\n\n\n\nBob\t41") == "\tName\tAge\nAlice\t30\n\nBob\t41"
+
+
+def test_box_public_download_host_is_accepted(enabled):
+    info = _file()
+    public = f"https://public.boxcloud.com/api/2.0/internal_files/{FILE}/content/"
+    info["representations"]["entries"][0]["content"]["url_template"] = public + "{+asset_path}"
+    r, *_ = _router(info)
+    route = r.get(public).mock(return_value=httpx.Response(200, text="hello"))
+    with r:
+        out = _call(server.read_file)(FILE)
+        assert route.calls[0].request.headers["Authorization"].startswith("Bearer ")
+        assert out["text"] == "hello"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://dl.boxcloud.com/api/2.0/x/",  # not https
+        "https://dl.boxcloud.com.evil.example/api/2.0/x/",  # suffix trick
+        "https://evilboxcloud.com/api/2.0/x/",  # no dot before the domain
+        "https://dl.boxcloud.com/other/2.0/x/",  # not under /api/2.0/
+        "https://user@dl.boxcloud.com/api/2.0/x/",  # userinfo
+    ],
+)
+def test_lookalike_download_urls_are_refused(enabled, url):
+    info = _file()
+    info["representations"]["entries"][0]["content"]["url_template"] = url + "{+asset_path}"
+    r, *_ = _router(info)
+    with r:
+        assert "outside the configured Box API" in _call(server.read_file)(FILE)["error"]
+
+
+@pytest.mark.parametrize("first", [202, 429, 503])
+def test_a_not_ready_or_throttled_content_answer_is_retried(enabled, monkeypatch, first):
+    monkeypatch.setattr("boxadm_mcp.client._backoff_delay", lambda attempt, resp=None: 0.0)
+    r, _, content, _ = _router(_file())
+    content.side_effect = [httpx.Response(first), httpx.Response(200, text="ready")]
+    with r:
+        out = _call(server.read_file)(FILE)
+        assert content.call_count == 2
+        assert out["text"] == "ready"
+
+
+def test_a_bad_url_from_box_does_not_reset_the_client(enabled, monkeypatch):
+    calls = []
+    monkeypatch.setattr(server, "reset_client", lambda: calls.append(1))
+    info = _file()
+    info["representations"]["entries"][0]["content"]["url_template"] = ""
+    r, *_ = _router(info)
+    with r:
+        assert "error" in _call(server.read_file)(FILE)
+    assert calls == []
+
+
+def test_the_row_matches_list_folder_items(enabled):
+    r, *_ = _router(_file())
+    with r:
+        out = _call(server.read_file)(FILE)
+    assert out["item_id"] == FILE
+    assert out["item_type"] == "file"
+    assert out["size_bytes"] == 915521
+
+
+def test_a_reader_misconfiguration_survives_an_early_return(monkeypatch):
+    """health_check returns early on a connection problem; the reader's state must not be lost."""
+    monkeypatch.setenv("BOXADM_READ_FOLDER_IDS", "0")
+    monkeypatch.delenv("BOX_CLIENT_ID", raising=False)
+    out = _call(server.health_check)()
+    assert out["status"] == "error"
+    assert out["read_file"] == "misconfigured"
+    assert "Missing environment variable" in out["detail"]
+    assert "BOXADM_READ_FOLDER_IDS" in out["detail"]

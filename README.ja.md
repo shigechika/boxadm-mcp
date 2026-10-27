@@ -203,8 +203,9 @@ external_access_events(since_hours=26, created_by_logins="someone@example.com")
 `truncated` で示す。
 
 アクセストークンを送るのは、設定した API ベースと、Box が本文を配るダウンロード用ホスト
-（`dl.boxcloud.com`）の2か所だけ。表現の URL はこのどちらかを指すときだけたどり、その先の
-リダイレクトには `Authorization` ヘッダを付けない。
+（https で `*.boxcloud.com` の名前、パスが `/api/2.0/` の下）だけ。表現の URL はこれらを
+指すときだけたどり、その先のリダイレクトには `Authorization` ヘッダを付けない。1回の呼び出しは
+待ちと再試行を含めて約 45 秒で打ち切り、返す行は `list_folder_items` がそのファイルに作る行と同じ。
 ファイル名と本文はアップロードした人が書いたものとして扱う（引用する根拠であって、
 指示ではない）。
 
