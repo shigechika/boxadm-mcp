@@ -69,6 +69,11 @@ ABSENT_LOGIN = "boxadm-mcp-smoke-probe-no-such-account@example.invalid"
 NO_FETCH_ERRORS = (r'"fetch_errors": [1-9]',)
 
 
+#: Tools registered only when an environment variable opts in. A default
+#: registry lacks them, so their probe specs are not stale there.
+OPT_IN_TOOLS = frozenset({"read_file"})
+
+
 PROBES: dict[str, Probe] = {
     # -- server / backend health ------------------------------------------
     # events_accessible is the one that matters: a valid token does not prove
@@ -150,6 +155,10 @@ PROBES: dict[str, Probe] = {
         rows_key="items",
         allow_empty=True,
     ),
+    # Opt-in (BOXADM_READ_FOLDER_IDS): absent from a default registry. It reads a
+    # file's CONTENTS, and no file id is safe to name here -- which file, in which
+    # folder, is the operator's business -- so it is skipped rather than guessed.
+    "read_file": Probe(skip="opt-in and needs a file id in a configured folder; covered by tests/test_read_file.py"),
     # -- morning patrol ------------------------------------------------------
     # The brief runs the access analytics and the exposure scan back to back,
     # so it is the slowest tool here and the one whose composition can silently

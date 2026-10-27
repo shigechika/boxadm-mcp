@@ -25,6 +25,9 @@ import httpx
 
 DEFAULT_TIMEOUT = 30
 DEFAULT_API_BASE = "https://api.box.com"
+#: Where Box serves representation content (``content.url_template``). It needs the
+#: same bearer token as the API, so it is the one other host the token may go to.
+DOWNLOAD_BASE = "https://dl.boxcloud.com"
 TOKEN_PATH = "/oauth2/token"
 API_PREFIX = "/2.0"
 
@@ -322,7 +325,7 @@ class _FolderReadMixin:
     the shared authenticated GET with retry/backoff on 429 / transient errors.
     """
 
-    def _get(self, path: str, params: dict | None = None) -> dict:
+    def _get(self, path: str, params: dict | None = None, headers: dict | None = None) -> dict:
         """Authenticated GET with a 401 re-auth retry and 429 / transient-error backoff.
 
         On 401 the subclass's ``_on_401()`` refreshes the token once and the request is
@@ -353,7 +356,7 @@ class _FolderReadMixin:
                 resp = self._http.get(
                     self._base + API_PREFIX + path,
                     params=params,
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers={**(headers or {}), "Authorization": f"Bearer {token}"},
                 )
                 resp.raise_for_status()
                 return resp.json()
@@ -389,6 +392,74 @@ class _FolderReadMixin:
             return False
         time.sleep(delay)
         return True
+
+    def get_file(self, file_id: str, *, fields: list[str] | None = None, rep_hints: str = "") -> dict:
+        """One file's own record. ``rep_hints`` (an ``x-rep-hints`` value) asks Box to list
+        the matching representations under ``representations``."""
+        fid = _validate_resource_id(file_id, kind="file")
+        return self._get(
+            f"/files/{fid}",
+            {"fields": ",".join(fields)} if fields else None,
+            {"x-rep-hints": rep_hints} if rep_hints else None,
+        )
+
+    def _api_path(self, url: object) -> str:
+        """The path of an absolute URL Box handed back, refused unless it is on this API.
+
+        Representation status and content URLs come from Box's own JSON. They are
+        followed only when they point at the configured API base, so the bearer
+        token is never sent to a host this client was not configured for.
+        """
+        prefix = self._base + API_PREFIX
+        if not isinstance(url, str) or not url.startswith(prefix + "/"):
+            raise BoxRequestError("refusing a URL outside the configured Box API")
+        return url[len(prefix) :]
+
+    def get_api_url(self, url: object) -> dict:
+        """GET an absolute API URL from a Box response (e.g. a representation's ``info.url``)."""
+        return self._get(self._api_path(url))
+
+    def get_text(self, url: object, *, max_bytes: int) -> tuple[str, bool]:
+        """Fetch a representation's text from its content URL, reading at most ``max_bytes``.
+
+        Returns ``(text, cut)``; ``cut`` is true when the body was longer than
+        ``max_bytes``. The URL comes from Box's JSON and is followed only when it
+        is on the configured API base or on Box's download host (``DOWNLOAD_BASE``),
+        the two places the bearer token may go. httpx drops the ``Authorization``
+        header if a redirect leaves the origin, so a hop elsewhere goes without it.
+        """
+        target = None
+        for base in (self._base + API_PREFIX, DOWNLOAD_BASE + "/api" + API_PREFIX):
+            if isinstance(url, str) and url.startswith(base + "/"):
+                target = url
+                _assert_endpoint_intact(url[len(base) :])
+        if target is None:
+            raise BoxRequestError("refusing a URL outside the configured Box API")
+        reauthed = False
+        while True:
+            token = self._ensure_token()
+            try:
+                with self._http.stream(
+                    "GET",
+                    target,
+                    headers={"Authorization": f"Bearer {token}"},
+                    follow_redirects=True,
+                ) as resp:
+                    if resp.status_code == 401 and not reauthed:
+                        self._on_401()
+                        reauthed = True
+                        continue
+                    if resp.status_code != 200:
+                        raise BoxError(f"HTTP {resp.status_code}: GET representation content")
+                    body = bytearray()
+                    for chunk in resp.iter_bytes():
+                        body.extend(chunk)
+                        if len(body) > max_bytes:
+                            break
+            except httpx.HTTPError as e:
+                raise BoxError(f"connection error: GET representation content: {e}") from e
+            cut = len(body) > max_bytes
+            return bytes(body[:max_bytes]).decode("utf-8", errors="replace"), cut
 
     def get_folder(self, folder_id: str, *, fields: list[str] | None = None) -> dict:
         """One folder's own record. See ``_validate_resource_id`` for why the id is checked."""

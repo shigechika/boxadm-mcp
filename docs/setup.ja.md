@@ -65,6 +65,7 @@ properties** スコープ」があることです。
 | `BOX_API_BASE` | Box API のベース URL | `https://api.box.com` |
 | `BOX_SCAN_CONCURRENCY` | 列挙スキャンのフォルダ単位並列数 | `8`（範囲 1–32 にクランプ） |
 | `BOX_SCAN_DEADLINE` | 列挙スキャン1回のソフトな実時間バジェット（秒）。`0`/負値で無効化。到達すると部分結果（`capped=true`）を開示して返す | `45` |
+| `BOXADM_READ_FOLDER_IDS` | `read_file` が読んでよいフォルダ（フォルダ ID をカンマ区切り。`0` は拒否）。未設定なら `read_file` は登録されない | *未設定* |
 | `BOX_HTTP_TIMEOUT` | リクエスト単位の HTTP タイムアウト（秒） | `30` |
 | `BOX_ALLOWED_DOMAINS` | 内部メールドメイン（カンマ区切り）。既定値なし — 設定するまで全アドレスが外部扱い | *必須* |
 
