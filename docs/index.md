@@ -25,6 +25,7 @@ Named after the admin-console viewpoint (`boxadm` = Box admin), sibling of
 | Exposure (enumeration) | `public_shared_links` | Lists items shared with an anyone-with-the-link share link |
 | Exposure (enumeration) | `top_external_sharers` | Ranks internal owners by external exposure |
 | One folder (`ls`) | `list_folder_items` | Names, upload time, size, uploader, and a direct link per item in one folder |
+| One file (`cat`), opt-in | `read_file` | The text Box extracted from one file in a configured folder |
 | Account state (lookup) | `get_user` | One account by its exact login: status, role, enterprise, quota, timestamps |
 | Combined | `daily_brief` | Morning summary combining access (events) and exposure (enumeration) |
 

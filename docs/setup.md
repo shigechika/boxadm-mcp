@@ -67,6 +67,7 @@ enterprise properties** scope.
 | `BOX_SCAN_CONCURRENCY` | Parallel per-folder lookups in the enumeration scan | `8` (clamped 1–32) |
 | `BOX_SCAN_DEADLINE` | Soft wall-clock budget (seconds) for one enumeration scan; `0`/negative disables. When hit, the scan returns a disclosed partial (`capped=true`) | `45` |
 | `BOX_HTTP_TIMEOUT` | Per-request HTTP timeout (seconds) | `30` |
+| `BOXADM_READ_FOLDER_IDS` | Folders whose files `read_file` may read (comma-separated folder ids; `0` refused). Unset: `read_file` is not registered | *unset* |
 | `BOX_ALLOWED_DOMAINS` | Internal email domains, comma-separated. No default — every address counts as external until set | *required* |
 
 Keep secrets out of `.mcp.json` (e.g. in a local env file sourced before

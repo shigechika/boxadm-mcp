@@ -25,6 +25,7 @@ events は見られません — それこそがこのサーバーの存在意�
 | 露出（列挙） | `public_shared_links` | 誰でもリンクの共有 item を列挙 |
 | 露出（列挙） | `top_external_sharers` | 内部 owner を外部露出で順位付け |
 | フォルダ1つの一覧（`ls`） | `list_folder_items` | 1フォルダ内の各アイテムの名前・アップロード日時・サイズ・アップロード者・直リンク |
+| ファイル1つの本文（`cat`、要設定） | `read_file` | 指定フォルダ内のファイル1つの、Box が抽出したテキスト |
 | アカウント状態（単体照会） | `get_user` | login 完全一致で1アカウントを照会：status・role・enterprise・容量・日時 |
 | 統合 | `daily_brief` | アクセス（events）× 露出（列挙）の朝サマリ |
 

@@ -26,7 +26,11 @@ test runs.
 
 ## Architecture
 
-- `boxadm_mcp/server.py` — MCPServer server with 9 tools: `health_check`,
+- `boxadm_mcp/server.py` — MCPServer server with 9 tools (10 when
+  `BOXADM_READ_FOLDER_IDS` registers the opt-in `read_file`, which returns the
+  text of Box's `extracted_text` representation for one file in a configured
+  folder — preview rights only, nothing downloaded or parsed; the token
+  goes only to the API base and `*.boxcloud.com` content URLs): `health_check`,
   `recent_admin_events` (raw diagnostic), `external_access_events`
   (enterprise-wide DOWNLOAD/PREVIEW analytics, plus a `created_by_logins`
   DLP-tracing mode), `external_collaborators` / `public_shared_links` /

@@ -105,7 +105,7 @@ def test_every_registered_tool_has_a_probe():
 
 def test_no_probe_targets_a_removed_tool():
     registered = _registered_tool_names()
-    stale = sorted(set(smoke_probes.PROBES) - registered)
+    stale = sorted(set(smoke_probes.PROBES) - registered - smoke_probes.OPT_IN_TOOLS)
     assert not stale, f"Probe spec(s) for tools that are no longer registered: {stale}"
 
 
