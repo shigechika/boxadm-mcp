@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/shigechika/boxadm-mcp/compare/v0.11.1...v0.12.0) (2026-10-27)
+
+
+### Features
+
+* add read_file, an opt-in cat for one file in a configured folder ([#74](https://github.com/shigechika/boxadm-mcp/issues/74)) ([1269d7e](https://github.com/shigechika/boxadm-mcp/commit/1269d7ee170ba792ef3b9515cb9529860b9cb942))
+
 ## [0.11.1](https://github.com/shigechika/boxadm-mcp/compare/v0.11.0...v0.11.1) (2026-10-26)
 
 
