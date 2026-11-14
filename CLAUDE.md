@@ -20,7 +20,7 @@ uv run ruff format --check .        # format check
 
 This mirrors `.github/workflows/ci.yml`: a `lint` job (`ruff check` +
 `ruff format --check`) and a `test` job (`pytest -v`) on Python
-3.10/3.12/3.13, **Linux only** — no Windows job, because `client.py` imports
+3.11–3.15, **Linux only** — no Windows job, because `client.py` imports
 `fcntl` at module load (POSIX-only; see below), which would fail before any
 test runs.
 
@@ -162,7 +162,7 @@ a rotation).
 
 ## Conventions
 
-- Python 3.10+, `requires-python = ">=3.10"`; `classifiers = ["Operating
+- Python 3.11+, `requires-python = ">=3.11"`; `classifiers = ["Operating
   System :: POSIX"]` — this package does not run on Windows (`fcntl`).
 - `ruff` lint rules: `E, F, I, W, UP`, line length **150** (wider than some
   sibling MCP repos in this family — this codebase predates a lint-enforced

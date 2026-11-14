@@ -17,7 +17,7 @@ import inspect
 import math
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -157,7 +157,7 @@ def _rfc3339_hours_ago(hours: int) -> str:
     Uses the explicit ``Z`` zone designator (unambiguous RFC3339) rather than a
     numeric offset, which some APIs render without the colon and reject.
     """
-    return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @mcp.tool()
@@ -1498,7 +1498,7 @@ def list_folder_items(folder_id: str, uploaded_by: str = "", since: str = "", un
     # matched neither created_at nor modified_at order -- so it cannot honestly be
     # presented as "newest". Sorting on the parsed instant also survives Box
     # returning a different UTC offset.
-    rows.sort(key=lambda r: _instant(r["created_at"]) or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    rows.sort(key=lambda r: _instant(r["created_at"]) or datetime.min.replace(tzinfo=UTC), reverse=True)
 
     matched = len(rows)
     rows = rows[:limit]

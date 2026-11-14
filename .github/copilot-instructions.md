@@ -26,7 +26,7 @@ uv run ruff format --check .        # format check
 
 This mirrors `.github/workflows/ci.yml`: a `lint` job (`ruff check` +
 `ruff format --check`) and a `test` job (`pytest -v`) on Python
-3.10/3.12/3.13, **Linux only** — there is no Windows job in this repo
+3.11–3.15, **Linux only** — there is no Windows job in this repo
 (unlike some sibling MCP repos in this family), because `client.py` imports
 `fcntl` at module load and would fail on import before any test ran. Don't
 suggest adding a Windows CI job without also addressing the `fcntl`
