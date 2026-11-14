@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/shigechika/boxadm-mcp/compare/v0.12.0...v0.13.0) (2026-11-14)
+
+
+### Features
+
+* drop Python 3.10 (EOL) and add Python 3.15 support ([#76](https://github.com/shigechika/boxadm-mcp/issues/76)) ([3769ec8](https://github.com/shigechika/boxadm-mcp/commit/3769ec8671f508a9eb3ff9578d465a013ea74170))
+
 ## [0.12.0](https://github.com/shigechika/boxadm-mcp/compare/v0.11.1...v0.12.0) (2026-10-27)
 
 
